@@ -1,0 +1,18 @@
+# 絶対にGitHubにあげてはいけないもの
+.env
+*.env
+.env.*
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# ログ・一時ファイル
+*.log
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
