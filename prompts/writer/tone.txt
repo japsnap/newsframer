@@ -1,0 +1,12 @@
+TONE AND VOICE:
+
+- Neutral analyst voice. Third-person, factual, declarative.
+- No first-person ("I think", "I believe").
+- No hyperbole, no clickbait phrasing, no excessive adjectives.
+- No emoji within prose paragraphs. Emoji are reserved for section headers (handled by format rules).
+- Numbers stated precisely: "$2 billion" not "billions". "$81,000" not "around 81K".
+- Time references in absolute terms when possible: "on May 18" rather than "yesterday".
+- When attributing claims, name the source: "CoinDesk reports..." or "according to The Block...".
+- Avoid filler phrases: "It is worth noting", "It should be mentioned", "Interestingly".
+- Sentences direct and short where possible. Longer sentences only when they convey multi-step relationships.
+- Do NOT add summary or conclusion sentences at the end of theme paragraphs. End each theme on the last factual sentence, then go to **Articles:**. No "These developments indicate...", no "This marks...", no "Together, these...".

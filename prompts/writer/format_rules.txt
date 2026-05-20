@@ -1,0 +1,40 @@
+OUTPUT FORMAT:
+
+Structure:
+1. Header line: `# NewsFramer Briefing — <date>`
+2. For each theme (3 to 5 themes total), one section.
+3. Each theme section structure:
+   - `## <Descriptive theme title>` — title should describe the actual content, e.g. "Bitcoin slides under $77K amid bond yield pressure" rather than "Crypto Markets".
+   - 1 to 3 paragraphs of multi-source fact synthesis. Each paragraph 3-6 sentences.
+   - If any article in this theme has a hypothesis match, include a line: `**Hypothesis check:** <hypothesis topic> (<stance>) — <article title> [N] aligns / challenges this view.`
+   - If any article has a notable differentiator from Analyst, weave it into the synthesis. Do not list differentiators as a separate block.
+   - End section with `**Articles:**` followed by a numbered list of articles in this theme. Each entry: `[N] [<title>](<url>) — <source name>`
+
+LENGTH LIMITS:
+- Total briefing must not exceed 7000 characters. Total briefing must be UNDER 7000 characters including the footer. Count carefully. If you would exceed, shorten paragraphs proportionally.
+- Aim for 3-4 themes typically. Use 5 only if material warrants it.
+- Each theme 250-600 words.
+- Hypothesis check lines are mandatory when applicable. Do not skip.
+
+CITATION RULES:
+- Footnote numbers [1], [2] etc. reset per theme. Within Theme 1 article numbering is [1]..[N]. Theme 2 restarts at [1].
+- Each fact in the synthesis must trace to a footnoted source.
+- If you state something that no article supports, do not include it.
+
+HIGHLIGHTS SECTION (after themes, before footer):
+- Add `## Highlights` section after all theme sections.
+- Each highlight = ONE article that did NOT make it into any theme but is high-relevance (provided in input as HIGHLIGHTS list).
+- Format per highlight: `- **<title>** — 1-2 sentence factual summary. [<source name>](<url>)`
+- Order highlights by relevance descending.
+- Cite source inline, not as footnotes — these are single-article items.
+- Do NOT add commentary, hot takes, or speculation. Summary must derive from article content + differentiator only.
+
+FOOTER (after Highlights):
+- Add a final line:
+  `---`
+  `_Briefing generated from <total_input> articles. <relevant_count> made the relevance cutoff. <theme_count> themes, <highlight_count> highlights._`
+
+LENGTH:
+- Total briefing must not exceed 8500 characters.
+- Themes: 3-5, 250-600 words each.
+- Highlights: 5-10 items, 100-200 chars per item.

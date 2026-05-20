@@ -1,0 +1,270 @@
+"""
+OpenClaw Fetcher Agent
+----------------------
+Fetches articles from all active sources in Supabase.
+Priority sources (vc_blog, research, blog) are always fetched first and guaranteed.
+News sources are fetched based on weight and total article limits.
+"""
+
+import feedparser
+import requests
+import yaml
+import os
+import time
+import hashlib
+from datetime import datetime, timezone, timedelta
+from bs4 import BeautifulSoup
+from supabase import create_client
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# --- Config ---
+def load_config():
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    config_path = os.path.join(base_dir, "config", "models.yaml")
+    with open(config_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+# --- Supabase ---
+def get_supabase():
+    return create_client(
+        os.getenv("SUPABASE_URL"),
+        os.getenv("SUPABASE_SERVICE_KEY")
+    )
+
+# --- Helpers ---
+def get_cutoff_time(config, is_first_run=False):
+    hours = config.get("first_run_hours_back", 48) if is_first_run else config.get("fetch_hours_back", 24)
+    return datetime.now(timezone.utc) - timedelta(hours=hours)
+
+def is_pr_article(title: str, source: dict) -> bool:
+    if source.get("notes") and "Avoid PR articles" in source["notes"]:
+        pr_keywords = ["sponsored", "partner", "press release", "advertorial", "paid post"]
+        return any(kw in title.lower() for kw in pr_keywords)
+    return False
+
+def load_junk_patterns(sb):
+    """Load active junk patterns from DB"""
+    try:
+        result = sb.table("junk_patterns").select("*").eq("active", True).execute()
+        return result.data
+    except Exception:
+        return []
+
+def is_junk_url(url: str, title: str, patterns: list = None) -> bool:
+    """Filter out non-article URLs"""
+    if not url or not title:
+        return True
+    if len(url) < 30 or len(title) < 15:
+        return True
+    if not url.startswith("http"):
+        return True
+
+    url_lower = url.lower()
+    title_lower = title.lower()
+
+    if patterns:
+        for p in patterns:
+            pattern = p["pattern"].lower()
+            ptype = p["pattern_type"]
+            if ptype == "url_contains" and pattern in url_lower:
+                return True
+            if ptype == "url_endswith" and url_lower.endswith(pattern):
+                return True
+            if ptype == "title_contains" and pattern in title_lower:
+                return True
+
+    return False
+
+def is_duplicate(sb, url: str, title: str) -> bool:
+    result = sb.table("raw_articles").select("id").eq("url", url).execute()
+    if result.data:
+        return True
+    return False
+
+def url_hash(url: str) -> str:
+    return hashlib.md5(url.encode()).hexdigest()
+
+# --- RSS Fetcher ---
+def fetch_rss(source: dict, cutoff: datetime, max_articles: int) -> list:
+    articles = []
+    try:
+        feed = feedparser.parse(source["rss_url"])
+        for entry in feed.entries[:max_articles * 2]:
+            title = entry.get("title", "")
+            url = entry.get("link", "")
+
+            if not title or not url:
+                continue
+            if is_pr_article(title, source):
+                continue
+
+            published = None
+            if hasattr(entry, "published_parsed") and entry.published_parsed:
+                published = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
+
+            if published and published < cutoff:
+                continue
+
+            content = entry.get("summary", "") or entry.get("description", "")
+
+            articles.append({
+                "source_id": source["id"],
+                "title": title,
+                "url": url,
+                "content_raw": content[:5000],
+                "published_at": published.isoformat() if published else datetime.now(timezone.utc).isoformat(),
+                "branch": None,
+                "duplicate_count": 1,
+            })
+
+            if len(articles) >= max_articles:
+                break
+
+    except Exception as e:
+        print(f"  RSS error for {source['name']}: {e}")
+
+    return articles
+
+# --- Web Scraper ---
+def fetch_web(source: dict, cutoff: datetime, max_articles: int) -> list:
+    articles = []
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; OpenClaw/1.0)"}
+        resp = requests.get(source["site_url"], headers=headers, timeout=10)
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        links = []
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            text = a.get_text(strip=True)
+            if len(text) > 20 and href.startswith("http"):
+                links.append({"title": text, "url": href})
+
+        for link in links[:max_articles]:
+            if is_pr_article(link["title"], source):
+                continue
+            articles.append({
+                "source_id": source["id"],
+                "title": link["title"],
+                "url": link["url"],
+                "content_raw": "",
+                "published_at": datetime.now(timezone.utc).isoformat(),
+                "branch": None,
+                "duplicate_count": 1,
+            })
+
+    except Exception as e:
+        print(f"  Web scrape error for {source['name']}: {e}")
+
+    return articles
+
+# --- Deduplication ---
+def deduplicate_batch(articles: list) -> list:
+    seen_urls = set()
+    unique = []
+    for a in articles:
+        if a["url"] not in seen_urls:
+            seen_urls.add(a["url"])
+            unique.append(a)
+    return unique
+
+# --- Main Fetcher ---
+def run_fetcher():
+    config = load_config()
+    sb = get_supabase()
+    start_time = time.time()
+
+    print("OpenClaw Fetcher starting...")
+
+    existing = sb.table("raw_articles").select("id").limit(1).execute()
+    is_first_run = len(existing.data) == 0
+    cutoff = get_cutoff_time(config, is_first_run)
+
+    print(f"  Mode: {'first run' if is_first_run else 'regular'} | Cutoff: {cutoff}")
+
+    sources_result = sb.table("sources").select("*").eq("active", True).execute()
+    sources = sources_result.data
+    junk_patterns = load_junk_patterns(sb)
+    print(f"  Loaded {len(junk_patterns)} junk patterns")
+
+    priority_types = config.get("priority_source_types", ["vc_blog", "research", "blog"])
+    max_per_source = config.get("max_articles_per_source", 10)
+    max_total = config.get("max_articles_total", 150)
+
+    priority_sources = [s for s in sources if s.get("source_type") in priority_types]
+    news_sources = [s for s in sources if s.get("source_type") not in priority_types]
+
+    all_articles = []
+
+    print(f"\nFetching priority sources ({len(priority_sources)})...")
+    for source in priority_sources:
+        print(f"  {source['name']}...")
+        if source.get("has_rss") and source.get("rss_url"):
+            articles = fetch_rss(source, cutoff, max_per_source)
+        else:
+            articles = fetch_web(source, cutoff, max_per_source)
+        print(f"    -> {len(articles)} articles")
+        all_articles.extend(articles)
+
+    print(f"\nFetching news sources ({len(news_sources)})...")
+    for source in news_sources:
+        remaining = max_total - len(all_articles)
+        if remaining <= 0:
+            print(f"  Total limit reached ({max_total}). Stopping news fetch.")
+            break
+
+        weight = source.get("weight", 1.0)
+        source_limit = min(int(max_per_source * weight), remaining)
+
+        print(f"  {source['name']} (weight={weight}, limit={source_limit})...")
+        if source.get("has_rss") and source.get("rss_url"):
+            articles = fetch_rss(source, cutoff, source_limit)
+        else:
+            articles = fetch_web(source, cutoff, source_limit)
+        print(f"    -> {len(articles)} articles")
+        all_articles.extend(articles)
+
+    all_articles = deduplicate_batch(all_articles)
+    print(f"\nAfter deduplication: {len(all_articles)} articles")
+
+    saved = 0
+    skipped_junk = 0
+    skipped_dup = 0
+
+    for article in all_articles:
+        if is_junk_url(article["url"], article["title"], junk_patterns):
+            skipped_junk += 1
+            continue
+        if is_duplicate(sb, article["url"], article["title"]):
+            skipped_dup += 1
+            continue
+        try:
+            sb.table("raw_articles").insert(article).execute()
+            saved += 1
+        except Exception as e:
+            print(f"  Insert error: {e}")
+
+    duration_ms = int((time.time() - start_time) * 1000)
+
+    sb.table("agent_runs").insert({
+        "agent_name": "fetcher",
+        "model_used": "none",
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "cost_usd": 0.0,
+        "duration_ms": duration_ms,
+        "status": "success",
+        "error": None,
+    }).execute()
+
+    print(f"\nFetcher done.")
+    print(f"  Saved: {saved}")
+    print(f"  Skipped (junk): {skipped_junk}")
+    print(f"  Skipped (duplicate): {skipped_dup}")
+    print(f"  Time: {duration_ms}ms")
+    return saved
+
+if __name__ == "__main__":
+    run_fetcher()

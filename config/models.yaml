@@ -1,0 +1,67 @@
+# モデル設定 — ここを変えるだけで全エージェントのモデルが切り替わる
+
+fetcher_model: "gemini/gemini-2.5-flash-lite"
+analyst_model: "gemini/gemini-2.5-flash-lite"
+writer_model: "anthropic/claude-sonnet-4-6"
+classifier_model: "gemini/gemini-2.5-flash-lite"
+
+# 切り替え例:
+# writer_model: "anthropic/claude-opus-4-6"
+# writer_model: "openai/gpt-4o"
+
+# Claude APIが使えない時のフォールバック:
+# analyst_model: "gemini/gemini-2.5-flash"
+# writer_model: "gemini/gemini-2.5-pro"
+
+# Fetcherの設定
+fetch_hours_back: 24
+first_run_hours_back: 48
+max_articles_per_source: 10
+max_articles_total: 150
+
+# Priority
+priority_source_types: ["vc_blog", "research", "blog"]
+priority_guaranteed: true  # 優先ソースは150件制限の外（fetcher.pyにハードコード済み）
+
+# --- Pricing per 1M tokens, USD ---
+# Update when swapping models or when provider prices change.
+# Used by every agent via estimate_cost(config, model, tokens_in, tokens_out).
+# Verified May 2026.
+pricing:
+  "gemini/gemini-2.5-flash-lite":
+    input: 0.10
+    output: 0.40
+  "anthropic/claude-haiku-4-5":
+    input: 1.00
+    output: 5.00
+  # Populate as each agent comes online:
+  # "anthropic/claude-sonnet-4-6": { input: ?, output: ? }
+  # "gemini/gemini-2.5-flash":     { input: 0.30, output: 2.50 }   # Claude fallback
+  # "gemini/gemini-2.5-pro":       { input: ?,    output: ? }      # Claude fallback
+
+analyst_max_articles_per_run: 300
+analyst_window_hours: 30
+
+# Writer settings
+writer_model: "anthropic/claude-haiku-4-5"
+writer_primary_language: "en"
+writer_min_relevance: 6
+writer_max_themes: 5
+writer_min_themes: 3
+writer_max_articles_per_theme: 6
+writer_window_hours: 30
+writer_max_chars: 8500
+writer_highlights_count: 8         # target number of highlights
+writer_highlights_min_relevance: 8 # only rel >= 8 articles become highlights
+
+# Deduplicator settings
+deduplicator_embedding_model: "gemini/gemini-embedding-001"
+deduplicator_embedding_dimensions: 768
+deduplicator_similarity_threshold: 0.85
+deduplicator_window_hours: 48
+deduplicator_price_event_window_hours: 12
+deduplicator_high_similarity_threshold: 0.90
+
+# Dispatcher settings
+dispatcher_telegram_msg_limit: 3500
+dispatcher_target_language: "en"
