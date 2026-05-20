@@ -5,7 +5,8 @@ from datetime import datetime
 from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
-PYTHON = str(BASE_DIR / "venv/Scripts/python.exe")
+import sys
+PYTHON = sys.executable
 
 AGENTS = [
 ("fetcher",      [PYTHON, str(BASE_DIR / "agents/fetcher.py")]),
