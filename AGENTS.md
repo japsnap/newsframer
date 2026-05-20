@@ -1,75 +1,85 @@
-# OpenClaw
+# NewsFramer — Agent Reference
 
 ## What this is
-Shota's personal AI agent system. Runs daily crypto/tech/geopolitical
-news briefings, learns from feedback, and grows over time.
+
+A personal news automation pipeline. Runs daily, delivers a themed briefing to Telegram.
 
 ## Architecture
-- Framework: CrewAI OSS + LiteLLM
-- Pattern: Choreography (event-driven, no central orchestrator)
-- State: Supabase (dedicated openclaw project)
-- Delivery: Telegram Bot
-- Hosting: Google Cloud Run (always-on) + local PC (for future resource-heavy tasks)
-- Models: config/models.yaml controls all model selection
 
-## Agents and their roles
-- Fetcher: collects articles from RSS and web sources; uses LLM conditionally for unstructured sources
-- Enricher: adds retroactive context to articles (historical prices, chart data, past news) before passing to Analyst; no fixed time range — context depth depends on the topic
-- Classifier: assigns Branch A (immediate) or Branch B (keep warm) based on time-sensitivity
-- Analyst: scores relevance and hypothesis alignment (Claude Haiku); labels each article as CONFIRMS_HYPOTHESIS / CHALLENGES_HYPOTHESIS / NEW_SIGNAL / NEUTRAL; does not filter out contradicting content — challenges and new signals are shown to Shota
-- Writer: generates briefings in Japanese, English, Urdu (Claude Sonnet); covers crypto, AI, tech, and geopolitics daily regardless of hypothesis relevance
-- Dispatcher: sends output to Telegram, saves drafts to Supabase
-- Tuner: updates prompt few-shots based on high-rated briefings; runs monthly by default, triggerable manually via /tune
+- **Stack:** Python 3.13, Supabase (Postgres + pgvector), LiteLLM, Telegram Bot API
+- **Pattern:** Sequential pipeline. Each agent is a standalone script. No agent calls another agent.
+- **Orchestration:** Database. Agents read/write Supabase tables and exit. `run_pipeline.py` runs all 6 in sequence.
+- **Hosting:** Google Cloud Run + Cloud Scheduler (daily at 06:00 JST)
+- **Models:** `config/models.yaml` controls all model selection — never hardcoded in agent code
+- **Prompts:** `prompts/<agent>/*.txt` — edit without touching code
 
-## Two-branch pipeline
-- Branch A (immediate): breaking price movements, regulatory news, geopolitical events — published same day
-- Branch B (keep warm): AI trends, market structure, hypothesis testing — Analyst tracks for multiple days before Writer generates output; weekly deep report
+---
 
-## Feedback system
-- Telegram: daily quick feedback via buttons and natural language replies
-- Vercel dashboard: weekly detailed review with multi-dimension scoring
-- Obsidian journal: nightly MCP sync to user_context table in Supabase
-- /tune command: triggers prompt update (default monthly, manual anytime)
-- Implicit feedback: Telegram link taps tracked as interest signal; articles ignored for 72+ hours marked as skipped (extended automatically over weekends)
+## Agents
 
-## Hypothesis rules
-- Hypotheses live in user_context table in Supabase
-- Vague hypotheses: recorded, not validated, not AI-completed; Shota notified once to clarify, reminded once after 2 weeks; can stay vague indefinitely
-- Somehow_clear hypotheses: AI may suggest completion; Shota must confirm before activating; no validation runs until confirmed
-- Precise hypotheses: full criteria met (condition, timeframe, threshold); goes straight to validation flow
-- AI determines specificity from Shota's natural language input; Shota can override
-- Validation runs daily or weekly depending on hypothesis type; outcome updates gradually (unconfirmed → partially_confirmed → confirmed / failed)
-- Contradicting hypotheses are detected automatically and flagged to Shota via Telegram
+### Fetcher (`agents/fetcher.py`)
+Pulls articles from RSS sources configured in the `sources` table. Two passes: priority thinker sources first, then news sources. Filters junk via `junk_patterns` table. Soft-deduplicates by URL.
+- **Model:** None (RSS only)
+- **Cost:** ~$0
 
-## Specificity rules for hypotheses
-- vague: notify Shota to clarify, no validation, stays vague if needed
-- somehow_clear: AI-assisted completion, Shota confirms before activating
-- precise: full criteria met, goes straight to validation flow
-- AI determines specificity from Shota's input, Shota can override
+### Classifier (`agents/classifier.py`)
+Labels each unclassified article as `IMMEDIATE` (time-sensitive) or `KEEP_WARM` (analytical). Batches 10 articles per LLM call. Detects intra-batch duplicates.
+- **Model:** `gemini/gemini-2.5-flash-lite`
+- **Cost:** ~$0.005
 
-## Source quality
-- Each source tracks avg_relevance_score, articles_fetched, articles_used, quality_score
-- Sources with repeated fetch errors are automatically blacklisted via error_patterns table
-- Duplicate articles across sources treated as importance signal — higher duplicate count raises relevance score
+### Deduplicator (`agents/deduplicator.py`)
+Generates 768-dim embeddings, finds similar article pairs (cosine ≥ 0.85), clusters them, soft-deletes losers. Two cluster types: `price_event` (keep latest) and `analysis` (keep earliest/originator). Run with `--apply` to mutate; default is dry-run.
+- **Model:** `gemini/gemini-embedding-001`
+- **Cost:** ~$0.001
 
-## Rules
-- Never hardcode API keys — always use .env
-- Always log agent runs to Supabase agent_runs table with cost, duration, model used
-- models.yaml controls all model selection — never hardcode model names in code
-- Keep all feedback data — it makes the system smarter over time
-- Prompt versions are tracked in prompt_versions table; never overwrite without logging
+### Analyst (`agents/analyst.py`)
+Scores each article 0-10 against user interests and active hypotheses loaded from `user_context` table. Labels each as `CONFIRMS_HYPOTHESIS`, `CHALLENGES_HYPOTHESIS`, `NEW_SIGNAL`, or `NEUTRAL`. Does not filter contradicting content — surfaces it. Prompt lives in `prompts/analyst/system_prompt.txt`.
+- **Model:** `gemini/gemini-2.5-flash-lite`
+- **Cost:** ~$0.015
 
-## Security rules
-- .env is gitignored — never commit API keys
-- Never print API keys in logs or error messages
-- Supabase service role key is server-side only, never in client code
-- agent_runs table logs errors without exposing key values
-- If adding new API keys, add to .env AND .gitignore first
-- All Telegram interactions use natural language or buttons — no IDs or internal values exposed to Shota
+### Writer (`agents/writer.py`)
+Loads top-scoring articles, clusters by topic overlap, synthesizes 3-5 themed sections + 8 highlights into a Markdown briefing. Stores in `briefings` table. Prompt split across `prompts/writer/system_prompt.txt`, `tone.txt`, `format_rules.txt`.
+- **Model:** `anthropic/claude-haiku-4-5`
+- **Cost:** ~$0.02
 
-## UX Rules (Telegram)
-- All user input must be natural language or button taps
-- Never ask for IDs, formatted commands, or anything requiring lookup
-- Syntax-based commands are acceptable only where no natural alternative exists
-- Always confirm before finalizing any update
-- Offer undo or correction at every step
+### Dispatcher (`agents/dispatcher.py`)
+Loads the latest un-dispatched briefing, splits at `##` section boundaries if over the char limit, sends to Telegram. Marks briefing as dispatched with message IDs.
+- **Model:** None
+- **Cost:** ~$0
+
+---
+
+## Key rules
+
+- Never hardcode API keys — always use `.env`
+- Never hardcode model names in code — always read from `config/models.yaml`
+- Always log agent runs to `agent_runs` table (cost, duration, model, status)
+- Soft-delete only — never hard-delete articles (audit trail for future Coach agent)
+- All numeric thresholds live in `config/models.yaml`, not in code
+
+---
+
+## Configuration
+
+| What | Where |
+|------|-------|
+| Model selection, thresholds, window hours | `config/models.yaml` |
+| Analyst scoring behavior | `prompts/analyst/system_prompt.txt` |
+| Briefing tone | `prompts/writer/tone.txt` |
+| Briefing format | `prompts/writer/format_rules.txt` |
+| User interests and hypotheses | `user_context` table (Supabase) |
+| RSS sources | `sources` table (Supabase) |
+| Junk filters | `junk_patterns` table (Supabase) |
+
+---
+
+## Roadmap
+
+### Phase 1.5 (next)
+- Critic agent — pre-send quality check (broken markdown, char overruns, editorial drift)
+- Telegram feedback loop — rate articles, system adjusts interest weights
+
+### Phase 2
+- Drafter agent — post drafts for X/Threads/Instagram/TikTok in user's voice
+- Coach agent — Telegram-driven calibration (`/more crypto`, `/less geopolitics`)
+- CrewAI integration — inter-agent dialogue for Drafter/Coach patterns
