@@ -30,7 +30,7 @@ Definitions:
     NEW_SIGNAL: relevant, no current hypothesis matches. Worth surfacing as potential new hypothesis.
     NEUTRAL: in scope but uneventful, or general background.
 - hypotheses: array of objects, one per matching active hypothesis. Use the exact id provided. alignment: +2 strongly confirms, +1 weakly confirms, 0 neutral touch, -1 weakly challenges, -2 strongly challenges. If no hypotheses match or none are provided, return [].
-- topics: lowercase tags, 1-5 items, e.g. ["xrp","etf","regulation"]. Free-form but kept short.
+- topics: lowercase tags, 1-5 items, e.g. ["technology","markets","policy"]. Free-form but kept short.
 - actionability:
     0 = FYI: no decision implied. Background/explainer/recap.
     1 = WATCH: ongoing situation, check back later (days-weeks).

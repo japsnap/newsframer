@@ -2,6 +2,14 @@
 .env
 *.env
 .env.*
+# keep the template (placeholders only) trackable
+!.env.example
+
+# Keys / certs — never commit
+.key
+*.key
+.pem
+*.pem
 
 # Python
 venv/
@@ -16,3 +24,10 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# Editors / IDEs
+.idea/
+.vscode/
+
+# Real local config — *.example.* templates are committed; real instances stay local
+user_context.json
