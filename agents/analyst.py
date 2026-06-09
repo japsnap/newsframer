@@ -71,23 +71,50 @@ def load_sources_map(sb):
 
 
 def load_articles_to_analyze(sb, cap, window_hours):
-    """Articles within the freshness window, classified, not deleted, not already scored."""
+    """Articles within the freshness window, classified, not deleted, not already scored.
+
+    Window-first + targeted scored-check: fetch the in-window classified articles
+    (paged), then look up scores for exactly those ids (chunked). The old code pulled
+    ALL analyst_scores ids in one unbounded query, which hit PostgREST's 1000-row cap
+    once >1000 scores existed — so already-scored articles past the cap slipped through
+    and the re-insert collided with the UNIQUE(article_id) constraint.
+    """
     from datetime import datetime, timezone, timedelta
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat()
 
-    already = sb.table("analyst_scores").select("article_id").execute()
-    scored_ids = {row["article_id"] for row in already.data if row.get("article_id")}
+    # 1. Candidate articles: in window, classified (branch set), alive — paged.
+    candidates = []
+    PAGE = 1000
+    start = 0
+    while True:
+        r = (
+            sb.table("raw_articles")
+            .select("id, source_id, title, content_raw, published_at, branch")
+            .not_.is_("branch", "null")
+            .is_("deleted_at", "null")
+            .gte("published_at", cutoff)
+            .order("published_at", desc=True)
+            .range(start, start + PAGE - 1)
+            .execute()
+        )
+        batch = r.data or []
+        candidates.extend(batch)
+        if len(batch) < PAGE:
+            break
+        start += PAGE
 
-    r = (
-        sb.table("raw_articles")
-        .select("id, source_id, title, content_raw, published_at, branch")
-        .not_.is_("branch", "null")
-        .is_("deleted_at", "null")
-        .gte("published_at", cutoff)
-        .order("published_at", desc=True)
-        .execute()
-    )
-    fresh = [a for a in r.data if a["id"] not in scored_ids]
+    # 2. Which of those are already scored? Query scores for exactly these ids.
+    cand_ids = [a["id"] for a in candidates]
+    scored_ids = set()
+    CHUNK = 50
+    for i in range(0, len(cand_ids), CHUNK):
+        ids_chunk = cand_ids[i:i + CHUNK]
+        sc = sb.table("analyst_scores").select("article_id").in_("article_id", ids_chunk).execute()
+        for row in (sc.data or []):
+            if row.get("article_id"):
+                scored_ids.add(row["article_id"])
+
+    fresh = [a for a in candidates if a["id"] not in scored_ids]
     if len(fresh) > cap:
         print(f"  WARN: {len(fresh)} eligible articles exceeds cap {cap}. Processing newest {cap} only.")
         fresh = fresh[:cap]

@@ -63,60 +63,83 @@ def load_user_context(sb):
     return {"interests": interests, "hypotheses": hypotheses, "by_id": by_id}
 
 
-def load_recent_analyzed_articles(sb, window_hours, min_relevance):
-    """Articles with analyst_scores, fresh, alive, above relevance threshold."""
+def load_window_scored_articles(sb, window_hours, exclude_account=None):
+    """All fresh, alive, analyst-scored articles in the window, MINUS any already
+    delivered to `exclude_account` (§4.3 set-difference). The relevance threshold /
+    backoff is applied by the caller, not here. Returns (articles_with_score,
+    total_in_window). Window-first + paged + chunked to avoid PostgREST's 1000-row cap.
+    """
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat()
 
-    # Articles qualify if EITHER relevance >= min OR actionability >= 2.
-    # Bypass lets time-sensitive low-relevance stories surface.
-    r = (
-        sb.table("analyst_scores")
-        .select(
-            "article_id, relevance_score, label, hypotheses, topics, actionability, "
-            "perspective_invited, reasoning, differentiator"
-        )
-        .or_(f"relevance_score.gte.{min_relevance},actionability.gte.2")
-        .execute()
-    )
-    scores_by_article = {row["article_id"]: row for row in (r.data or [])}
-    if not scores_by_article:
-        return [], 0
-
-    art_ids = list(scores_by_article.keys())
-
-    # Fetch the articles, in chunks to avoid URL length issues
-    all_arts = []
-    CHUNK = 50
-    for i in range(0, len(art_ids), CHUNK):
-        ids_chunk = art_ids[i:i+CHUNK]
-        r2 = (
+    # 1. Fresh, alive articles in the window (paged).
+    arts = []
+    PAGE = 1000
+    start = 0
+    while True:
+        r = (
             sb.table("raw_articles")
             .select("id, source_id, title, url, content_raw, published_at")
-            .in_("id", ids_chunk)
             .gte("published_at", cutoff)
             .is_("deleted_at", "null")
+            .order("published_at", desc=True)
+            .range(start, start + PAGE - 1)
             .execute()
         )
-        all_arts.extend(r2.data or [])
+        batch = r.data or []
+        arts.extend(batch)
+        if len(batch) < PAGE:
+            break
+        start += PAGE
+    total_in_window = len(arts)
+    if not arts:
+        return [], 0
 
-    # Also count total analyzed in window (for footer)
-    r3 = (
-        sb.table("raw_articles")
-        .select("id", count="exact")
-        .gte("published_at", cutoff)
-        .is_("deleted_at", "null")
-        .execute()
-    )
-    total_in_window = r3.count or 0
+    window_ids = [a["id"] for a in arts]
 
-    # Join score data into each article
-    merged = []
-    for a in all_arts:
+    # 2. §4.3 set-difference: which of these were already delivered to this account?
+    #    Scoped to the window ids (chunked) so it can't hit the 1000-row cap.
+    delivered = set()
+    if exclude_account:
+        for i in range(0, len(window_ids), 50):
+            chunk = window_ids[i:i + 50]
+            d = (
+                sb.table("deliveries")
+                .select("article_id")
+                .eq("account", exclude_account)
+                .in_("article_id", chunk)
+                .execute()
+            )
+            for row in (d.data or []):
+                if row.get("article_id"):
+                    delivered.add(row["article_id"])
+
+    # 3. Scores for the non-delivered in-window articles (chunked).
+    candidate_ids = [i for i in window_ids if i not in delivered]
+    scores_by_article = {}
+    for i in range(0, len(candidate_ids), 50):
+        ids_chunk = candidate_ids[i:i + 50]
+        r2 = (
+            sb.table("analyst_scores")
+            .select(
+                "article_id, relevance_score, label, hypotheses, topics, actionability, "
+                "perspective_invited, reasoning, differentiator"
+            )
+            .in_("article_id", ids_chunk)
+            .execute()
+        )
+        for row in (r2.data or []):
+            scores_by_article[row["article_id"]] = row
+
+    # 4. Attach scores; keep only scored, non-delivered articles. No threshold here.
+    out = []
+    for a in arts:
+        if a["id"] in delivered:
+            continue
         s = scores_by_article.get(a["id"])
         if s:
             a["score"] = s
-            merged.append(a)
-    return merged, total_in_window
+            out.append(a)
+    return out, total_in_window
 
 
 def load_sources_map(sb):
@@ -307,6 +330,17 @@ def estimate_cost(config, model, tokens_in, tokens_out):
     return (tokens_in / 1_000_000) * pricing["input"] + (tokens_out / 1_000_000) * pricing["output"]
 
 
+def _log_writer_skip(sb, reason, total_in_window):
+    """Record a no-brief outcome so a quiet/missed run is observable (the delivery layer alerts)."""
+    try:
+        sb.table("agent_runs").insert(
+            {"agent_name": "writer", "model_used": "none", "status": reason}
+        ).execute()
+    except Exception as e:
+        print(f"  (could not log writer skip: {e})")
+    print(f"  Writer skip logged: {reason} (in-window={total_in_window})")
+
+
 def run_writer():
     config = load_config()
     sb = get_supabase()
@@ -315,17 +349,19 @@ def run_writer():
     model = config.get("writer_model", "anthropic/claude-haiku-4-5")
     lang = config.get("writer_primary_language", "en")
     min_rel = int(config.get("writer_min_relevance", 6))
+    rel_floor = int(config.get("writer_relevance_floor", 4))
+    delivery_account = config.get("writer_delivery_account", "newsframer")
     max_themes = int(config.get("writer_max_themes", 5))
     min_themes = int(config.get("writer_min_themes", 3))
     max_per_theme = int(config.get("writer_max_articles_per_theme", 6))
-    window_hours = int(config.get("writer_window_hours", 30))
+    window_hours = int(config.get("writer_window_hours", 24))
     max_chars = int(config.get("writer_max_chars", 7000))
 
     print("OpenClaw Writer starting...")
     print(f"  Model:          {model}")
     print(f"  Language:       {lang}")
     print(f"  Window:         {window_hours}h")
-    print(f"  Min relevance:  {min_rel}")
+    print(f"  Min relevance:  {min_rel} (floor {rel_floor})")
     print(f"  Themes:         {min_themes}-{max_themes}")
     print(f"  Max char count: {max_chars}")
 
@@ -333,15 +369,41 @@ def run_writer():
     print(f"  Interests:      {len(context['interests'])}")
     print(f"  Hypotheses:     {len(context['hypotheses'])}")
 
-    articles, total_in_window = load_recent_analyzed_articles(sb, window_hours, min_rel)
+    candidates, total_in_window = load_window_scored_articles(
+        sb, window_hours, exclude_account=delivery_account
+    )
     sources_map = load_sources_map(sb)
 
-    print(f"  Articles in window:         {total_in_window}")
-    print(f"  Articles meeting cutoff:    {len(articles)}\n")
+    # §4.5 relevance backoff: lower the threshold ONLY within the 24h window (never outside),
+    # down to writer_relevance_floor, until at least min_themes articles qualify.
+    def _over_bar(a, rel):
+        s = a["score"]
+        return (s.get("relevance_score") or 0) >= rel or (s.get("actionability") or 0) >= 2
 
+    articles = []
+    chosen_rel = min_rel
+    for rel in range(min_rel, rel_floor - 1, -1):
+        chosen_rel = rel
+        articles = [a for a in candidates if _over_bar(a, rel)]
+        if len(articles) >= min_themes:
+            break
+
+    print(f"  Articles in {window_hours}h window:  {total_in_window}")
+    print(f"  Non-delivered scored:       {len(candidates)}")
+    print(f"  Qualifying (rel>={chosen_rel} or act>=2): {len(articles)}\n")
+
+    # §4.5 thin-day guard. Never backfill older/lower than the floor.
+    quiet_day = False
     if len(articles) < min_themes:
-        print(f"Only {len(articles)} articles meet cutoff. Need {min_themes}+. Lower writer_min_relevance and retry.")
-        return
+        if len(articles) >= 1:
+            quiet_day = True
+            print(f"  THIN DAY: {len(articles)} qualify (< {min_themes}). Writing a short quiet-day brief.")
+        else:
+            print("  QUIET DAY: 0 articles qualified within 24h. No brief written (delivery layer will alert).")
+            _log_writer_skip(sb, "quiet_day_no_articles", total_in_window)
+            return
+
+    effective_min_themes = 1 if quiet_day else min_themes
 
     clusters, leftovers = cluster_by_topic_overlap(articles, max_themes, max_per_theme)
     highlights_count = int(config.get("writer_highlights_count", 8))
@@ -355,8 +417,9 @@ def run_writer():
     for h in highlights:
         print(f"    rel={h['score'].get('relevance_score')} | {h['title'][:70]}")
 
-    if len(clusters) < min_themes:
-        print(f"\nOnly {len(clusters)} clusters. Need {min_themes}+. Briefing skipped.")
+    if len(clusters) < effective_min_themes:
+        print(f"\nOnly {len(clusters)} clusters. Need {effective_min_themes}+. Briefing skipped.")
+        _log_writer_skip(sb, "no_clusters", total_in_window)
         return
 
     briefing_date = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d (%H:%M %Z)")
@@ -378,6 +441,8 @@ def run_writer():
         max_tokens=4500,
     )
     briefing_text = response.choices[0].message.content.strip()
+    if quiet_day:
+        briefing_text = "_Quiet news day — fewer items than usual._\n\n" + briefing_text
 
     usage = getattr(response, "usage", None)
     t_in = getattr(usage, "prompt_tokens", 0) if usage else 0
@@ -391,17 +456,21 @@ def run_writer():
     print(f"Briefing chars: {len(briefing_text)} (limit: {max_chars})")
     print(f"Tokens: in={t_in} out={t_out} | Cost: ${cost:.4f} | Time: {duration_ms}ms")
 
-    # Store
+    # Store. Record which article IDs went into the brief (clusters + highlights) so the
+    # delivery layer can mark them delivered (§4.3) once the send is confirmed.
+    selected_ids = [a["id"] for cluster in clusters for a in cluster] + [h["id"] for h in highlights]
+    selected_ids = list(dict.fromkeys(selected_ids))
     content_col = f"content_{lang}"
     insert_row = {
         "date": datetime.now(timezone.utc).date().isoformat(),
         content_col: briefing_text,
         "model_writer": model,
         "cost_usd": round(cost, 6),
+        "article_ids": selected_ids,
     }
     result = sb.table("briefings").insert(insert_row).execute()
     briefing_id = result.data[0]["id"] if result.data else None
-    print(f"Saved briefing id={briefing_id}")
+    print(f"Saved briefing id={briefing_id} ({len(selected_ids)} article_ids)")
 
     sb.table("agent_runs").insert({
         "agent_name": "writer",

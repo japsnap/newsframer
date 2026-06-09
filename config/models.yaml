@@ -46,10 +46,12 @@ analyst_window_hours: 30
 writer_model: "anthropic/claude-haiku-4-5"
 writer_primary_language: "en"
 writer_min_relevance: 6
+writer_relevance_floor: 4              # §4.5: backoff may lower the threshold down to here, within the 24h window
 writer_max_themes: 5
 writer_min_themes: 3
 writer_max_articles_per_theme: 6
-writer_window_hours: 30
+writer_window_hours: 24                # §4.5: 24h day-window (reduced from 30 to avoid overlap)
+writer_delivery_account: "newsframer"  # §4.3: exclude article IDs already delivered to this account
 writer_max_chars: 8500
 writer_highlights_count: 8         # target number of highlights
 writer_highlights_min_relevance: 8 # only rel >= 8 articles become highlights
