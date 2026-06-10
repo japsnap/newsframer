@@ -19,6 +19,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# §8.7: the distributed scrape calendar is keyed to the JST weekday (the brief runs 06:00 JST).
+JST = timezone(timedelta(hours=9))
+
 # --- Config ---
 def load_config():
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -37,6 +40,38 @@ def get_supabase():
 def get_cutoff_time(config, is_first_run=False):
     hours = config.get("first_run_hours_back", 48) if is_first_run else config.get("fetch_hours_back", 24)
     return datetime.now(timezone.utc) - timedelta(hours=hours)
+
+def source_window_hours(config, source, is_first_run):
+    """§8.1: each source uses its OWN fetch_window_hours; fall back to the global default."""
+    default_h = config.get("first_run_hours_back", 48) if is_first_run else config.get("fetch_hours_back", 24)
+    win = source.get("fetch_window_hours") or default_h
+    if is_first_run:
+        win = max(win, config.get("first_run_hours_back", 48))
+    return win
+
+def is_scrape_source(source):
+    """A source is a scrape job when it has no usable RSS feed (routed to fetch_web)."""
+    return not (source.get("has_rss") and source.get("rss_url"))
+
+def scrape_scheduled_today(source, today_jst):
+    """§8.7: gate heavy/scrape sources to their scheduled weekday(s). Null scrape_days = run whenever active."""
+    sd = (source.get("scrape_days") or "").strip().lower()
+    if not sd:
+        return True
+    return today_jst in [d.strip()[:3] for d in sd.split(",") if d.strip()]
+
+def fetch_one(config, source, is_first_run, today_jst, limit):
+    """Fetch one source honoring §8.1 per-source window + §8.7 scrape-day gate.
+    Returns (articles_or_None, status_note); None means skipped by the scrape calendar."""
+    if is_scrape_source(source) and not scrape_scheduled_today(source, today_jst):
+        return None, f"skipped (scrape day={source.get('scrape_days')}, today={today_jst})"
+    win = source_window_hours(config, source, is_first_run)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=win)
+    if source.get("has_rss") and source.get("rss_url"):
+        arts = fetch_rss(source, cutoff, limit)
+    else:
+        arts = fetch_web(source, cutoff, limit)
+    return arts, f"window {win}h -> {len(arts)} articles"
 
 def is_pr_article(title: str, source: dict) -> bool:
     if source.get("notes") and "Avoid PR articles" in source["notes"]:
@@ -180,9 +215,9 @@ def run_fetcher():
 
     existing = sb.table("raw_articles").select("id").limit(1).execute()
     is_first_run = len(existing.data) == 0
-    cutoff = get_cutoff_time(config, is_first_run)
+    today_jst = datetime.now(JST).strftime("%a").lower()[:3]  # mon..sun, §8.7 weekday gate
 
-    print(f"  Mode: {'first run' if is_first_run else 'regular'} | Cutoff: {cutoff}")
+    print(f"  Mode: {'first run' if is_first_run else 'regular'} | JST day: {today_jst} | per-source windows (§8.1)")
 
     sources_result = sb.table("sources").select("*").eq("active", True).execute()
     sources = sources_result.data
@@ -200,13 +235,10 @@ def run_fetcher():
 
     print(f"\nFetching priority sources ({len(priority_sources)})...")
     for source in priority_sources:
-        print(f"  {source['name']}...")
-        if source.get("has_rss") and source.get("rss_url"):
-            articles = fetch_rss(source, cutoff, max_per_source)
-        else:
-            articles = fetch_web(source, cutoff, max_per_source)
-        print(f"    -> {len(articles)} articles")
-        all_articles.extend(articles)
+        articles, note = fetch_one(config, source, is_first_run, today_jst, max_per_source)
+        print(f"  {source['name']}... {note}")
+        if articles:
+            all_articles.extend(articles)
 
     print(f"\nFetching news sources ({len(news_sources)})...")
     for source in news_sources:
@@ -218,13 +250,10 @@ def run_fetcher():
         weight = source.get("weight", 1.0)
         source_limit = min(int(max_per_source * weight), remaining)
 
-        print(f"  {source['name']} (weight={weight}, limit={source_limit})...")
-        if source.get("has_rss") and source.get("rss_url"):
-            articles = fetch_rss(source, cutoff, source_limit)
-        else:
-            articles = fetch_web(source, cutoff, source_limit)
-        print(f"    -> {len(articles)} articles")
-        all_articles.extend(articles)
+        articles, note = fetch_one(config, source, is_first_run, today_jst, source_limit)
+        print(f"  {source['name']} (weight={weight}, limit={source_limit})... {note}")
+        if articles:
+            all_articles.extend(articles)
 
     all_articles = deduplicate_batch(all_articles)
     print(f"\nAfter deduplication: {len(all_articles)} articles")

@@ -5,6 +5,10 @@
 # keep the template (placeholders only) trackable
 !.env.example
 
+# Local agent/Codex context and settings
+CLAUDE.md
+.codex/
+
 # Keys / certs — never commit
 .key
 *.key
@@ -31,3 +35,4 @@ Thumbs.db
 
 # Real local config — *.example.* templates are committed; real instances stay local
 user_context.json
+config/whatsapp_deliveries.yaml

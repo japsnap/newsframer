@@ -1,0 +1,22 @@
+# WhatsApp delivery registry — TEMPLATE (committed). Copy to whatsapp_deliveries.yaml
+# (gitignored) and fill in real targets. See whatsapp_deliveries.yaml header for how group
+# JIDs are captured. DMs need only the E.164 phone number.
+account: wikibot
+translate_model: gemini/gemini-2.5-flash-lite
+
+topic_keywords:
+  geopolitics: ["geopolit", "middle east", "international affairs", "foreign policy", "diplomacy", "ceasefire", "sanction", "nato", "united nations", "security council"]
+  pakistan: ["pakistan", "kashmir", "balochistan", "islamabad"]
+  cybersecurity: ["cyber", "malware", "ransomware", "vulnerability", "exploit", "breach", "cve", "zero-day"]
+
+deliveries:
+  - name: "Example Group"
+    target: "000000000000000000@g.us"   # real group JID, captured once
+    kind: group
+    categories: ["geopolitics", "pakistan"]
+    languages: ["en", "ur"]
+  - name: "Example DM"
+    target: "+10000000000"               # E.164 phone number for a direct chat
+    kind: dm
+    categories: ["geopolitics", "pakistan", "cybersecurity"]
+    languages: ["en"]

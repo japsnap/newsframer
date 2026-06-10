@@ -19,6 +19,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Asia/Tokyo (JST = UTC+9, no DST). The brief date/header must be JST, not UTC: a 06:00 JST
+# run is 21:00 UTC the prior day, so a UTC date would show YESTERDAY.
+JST = timezone(timedelta(hours=9))
+
 
 def load_config():
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -355,7 +359,10 @@ def run_writer():
     min_themes = int(config.get("writer_min_themes", 3))
     max_per_theme = int(config.get("writer_max_articles_per_theme", 6))
     window_hours = int(config.get("writer_window_hours", 24))
-    max_chars = int(config.get("writer_max_chars", 7000))
+    # Fix 2: char cap scales with the number of themes (computed after clustering, below).
+    per_theme_chars = int(config.get("writer_per_theme_chars", 2500))
+    max_chars_floor = int(config.get("writer_max_chars_floor", 6000))
+    max_chars_ceiling = int(config.get("writer_max_chars_ceiling", 16000))
 
     print("OpenClaw Writer starting...")
     print(f"  Model:          {model}")
@@ -363,7 +370,7 @@ def run_writer():
     print(f"  Window:         {window_hours}h")
     print(f"  Min relevance:  {min_rel} (floor {rel_floor})")
     print(f"  Themes:         {min_themes}-{max_themes}")
-    print(f"  Max char count: {max_chars}")
+    print(f"  Char budget:    {per_theme_chars}/theme (floor {max_chars_floor}, ceiling {max_chars_ceiling})")
 
     context = load_user_context(sb)
     print(f"  Interests:      {len(context['interests'])}")
@@ -422,7 +429,13 @@ def run_writer():
         _log_writer_skip(sb, "no_clusters", total_in_window)
         return
 
-    briefing_date = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d (%H:%M %Z)")
+    # Fix 2: cap scales with the themes the brief actually produces, clamped floor..ceiling.
+    max_chars = max(max_chars_floor, min(max_chars_ceiling, per_theme_chars * len(clusters)))
+    print(f"  Char cap: {per_theme_chars} x {len(clusters)} themes = {per_theme_chars * len(clusters)} "
+          f"-> {max_chars} (floor {max_chars_floor}, ceiling {max_chars_ceiling})")
+
+    now_jst = datetime.now(JST)
+    briefing_date = now_jst.strftime("%Y-%m-%d (%H:%M JST)")
     system_prompt = load_prompt_files()
     relevant_count = len(articles)
     user_prompt = build_user_prompt(
@@ -430,16 +443,24 @@ def run_writer():
         total_in_window, relevant_count, briefing_date, max_chars
     )
 
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    # Anthropic primary, Gemini 2.5 Flash-Lite fallback: an outage / rate-limit / billing
+    # error on the primary degrades to the cheap model instead of failing the brief.
+    fallback_model = config.get("writer_fallback_model", "gemini/gemini-2.5-flash-lite")
+    used_model = model
     print(f"\nGenerating briefing with {model}...")
-    response = completion(
-        model=model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=0.3,
-        max_tokens=4500,
-    )
+    try:
+        response = completion(model=model, messages=messages, temperature=0.3, max_tokens=4500)
+    except Exception as primary_err:
+        if fallback_model and fallback_model != model:
+            print(f"  PRIMARY {model} FAILED: {primary_err}\n  Falling back to {fallback_model}...")
+            used_model = fallback_model
+            response = completion(model=used_model, messages=messages, temperature=0.3, max_tokens=4500)
+        else:
+            raise
     briefing_text = response.choices[0].message.content.strip()
     if quiet_day:
         briefing_text = "_Quiet news day — fewer items than usual._\n\n" + briefing_text
@@ -447,13 +468,13 @@ def run_writer():
     usage = getattr(response, "usage", None)
     t_in = getattr(usage, "prompt_tokens", 0) if usage else 0
     t_out = getattr(usage, "completion_tokens", 0) if usage else 0
-    cost = estimate_cost(config, model, t_in, t_out)
+    cost = estimate_cost(config, used_model, t_in, t_out)
     duration_ms = int((time.time() - start) * 1000)
 
     print(f"\n{'-' * 60}")
     print(briefing_text)
     print(f"{'-' * 60}\n")
-    print(f"Briefing chars: {len(briefing_text)} (limit: {max_chars})")
+    print(f"Briefing chars: {len(briefing_text)} (limit: {max_chars}) | model: {used_model}")
     print(f"Tokens: in={t_in} out={t_out} | Cost: ${cost:.4f} | Time: {duration_ms}ms")
 
     # Store. Record which article IDs went into the brief (clusters + highlights) so the
@@ -462,9 +483,9 @@ def run_writer():
     selected_ids = list(dict.fromkeys(selected_ids))
     content_col = f"content_{lang}"
     insert_row = {
-        "date": datetime.now(timezone.utc).date().isoformat(),
+        "date": now_jst.date().isoformat(),
         content_col: briefing_text,
-        "model_writer": model,
+        "model_writer": used_model,
         "cost_usd": round(cost, 6),
         "article_ids": selected_ids,
     }
