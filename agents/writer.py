@@ -30,6 +30,7 @@ from llm_json import parse_json_obj  # noqa: E402
 from drop_reports import (  # noqa: E402
     make_slug, is_woven, render_investigations_section, splice_investigations,
 )
+from bundle_floors import select_themes_with_floors  # noqa: E402
 
 load_dotenv()
 
@@ -168,6 +169,12 @@ def load_window_scored_articles(sb, window_hours, exclude_account=None):
 def load_sources_map(sb):
     r = sb.table("sources").select("id, name").execute()
     return {s["id"]: s.get("name", "Unknown") for s in (r.data or [])}
+
+
+def load_source_categories(sb):
+    """source_id -> category (the 'bundle' an article belongs to, spec §8.1)."""
+    r = sb.table("sources").select("id, category").execute()
+    return {s["id"]: s.get("category") for s in (r.data or [])}
 
 
 def composite_score(article):
@@ -529,7 +536,6 @@ def run_writer():
     min_rel = int(config.get("writer_min_relevance", 6))
     rel_floor = int(config.get("writer_relevance_floor", 4))
     delivery_account = config.get("writer_delivery_account", "newsframer")
-    max_themes = int(config.get("writer_max_themes", 5))
     min_themes = int(config.get("writer_min_themes", 3))
     max_per_theme = int(config.get("writer_max_articles_per_theme", 6))
     window_hours = int(config.get("writer_window_hours", 24))
@@ -537,13 +543,21 @@ def run_writer():
     per_theme_chars = int(config.get("writer_per_theme_chars", 2500))
     max_chars_floor = int(config.get("writer_max_chars_floor", 6000))
     max_chars_ceiling = int(config.get("writer_max_chars_ceiling", 16000))
+    # Per-bundle theme floors (spec §8.1/§8.6) — Telegram brief only. Guarantee each active
+    # bundle a floor of themes, cap any single bundle, scale total with active-bundle count.
+    bundle_floors = config.get("bundle_theme_floors") or {
+        "crypto": 1, "geopolitics": 1, "pakistan": 1, "cybersecurity": 1, "tech": 1
+    }
+    bundle_cap = int(config.get("bundle_theme_cap", 2))
+    theme_multiplier = float(config.get("theme_count_multiplier", 1.5))
+    theme_total_max = int(config.get("theme_count_max", 10))
 
     print("OpenClaw Writer starting...")
     print(f"  Model:          {model}")
     print(f"  Language:       {lang}")
     print(f"  Window:         {window_hours}h")
     print(f"  Min relevance:  {min_rel} (floor {rel_floor})")
-    print(f"  Themes:         {min_themes}-{max_themes}")
+    print(f"  Themes:         min {min_themes}, per-bundle floors (cap {bundle_cap}, x{theme_multiplier}, max {theme_total_max})")
     print(f"  Char budget:    {per_theme_chars}/theme (floor {max_chars_floor}, ceiling {max_chars_ceiling})")
 
     context = load_user_context(sb)
@@ -602,7 +616,19 @@ def run_writer():
 
     effective_min_themes = 1 if quiet_day else min_themes
 
-    clusters, leftovers = cluster_by_topic_overlap(articles, max_themes, max_per_theme)
+    # Per-bundle theme floors (spec §8.1/§8.6): cluster ALL qualifying articles (the clustering
+    # algorithm is unchanged — passing a large cap just makes it return every cluster instead of
+    # pre-truncating to the top-N), then re-allocate which clusters become themes so each active
+    # bundle gets its floor, no bundle exceeds its cap, and the total scales with the active-bundle
+    # count. Telegram brief only; WhatsApp (which reuses cluster_by_topic_overlap directly) is untouched.
+    all_clusters, _ = cluster_by_topic_overlap(articles, len(articles), max_per_theme)
+    source_categories = load_source_categories(sb)
+    clusters, leftovers, floor_report = select_themes_with_floors(
+        all_clusters, source_categories, bundle_floors, bundle_cap, theme_multiplier, theme_total_max
+    )
+    print(f"  Bundle floors: {floor_report['num_active']} active bundle(s) -> "
+          f"{floor_report['theme_count']}/{floor_report['target_total']} themes | "
+          f"by-score={floor_report['before']} floored={floor_report['after']}")
     highlights_count = int(config.get("writer_highlights_count", 8))
     highlights_min_rel = int(config.get("writer_highlights_min_relevance", 8))
     highlights = pick_highlights(leftovers, highlights_count, highlights_min_rel)

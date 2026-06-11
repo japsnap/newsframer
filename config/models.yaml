@@ -66,6 +66,21 @@ drop_report_window_hours: 168      # 7-day deduped window for investigative drop
 drop_report_max: 3                 # max drops per brief; logs overflow (no silent cap)
 drop_report_model: "gemini/gemini-2.5-flash-lite"  # cheap model for the short+long drop summaries
 
+# Per-bundle theme floors (spec §8.1/§8.6) — Telegram brief only. Guarantees each ACTIVE bundle
+# (a source category with >=1 qualifying in-window article) a minimum presence in the OUTPUT, so a
+# high-volume bundle (crypto) can't crowd out a low-frequency one (cybersecurity). A bundle with
+# nothing qualifying is simply absent (no stale padding, §4.5). NOTE: writer_max_themes above now
+# governs the WhatsApp briefs only; the Telegram theme count is the dynamic target below.
+bundle_theme_floors:               # guaranteed minimum themes per active bundle
+  crypto: 1
+  geopolitics: 1
+  pakistan: 1
+  cybersecurity: 1
+  tech: 1
+bundle_theme_cap: 2                # max themes any single bundle may take (covers 2 big stories, never monopolizes)
+theme_count_multiplier: 1.5        # total Telegram themes = ceil(multiplier * number of active bundles); 5 bundles -> 8
+theme_count_max: 10                # absolute safety ceiling on total themes
+
 # Deduplicator settings
 deduplicator_embedding_model: "gemini/gemini-embedding-001"
 deduplicator_embedding_dimensions: 768
