@@ -15,6 +15,7 @@ Usage:  python run_whatsapp_brief.py              (dry run: generate + save + pr
 import os
 import re
 import sys
+import json
 import argparse
 import subprocess
 
@@ -25,6 +26,7 @@ from agents.writer import (  # noqa: E402  (reuse, do not modify writer.py)
     load_config, get_supabase, load_window_scored_articles, cluster_by_topic_overlap,
     pick_highlights, build_user_prompt, load_prompt_files, JST,
 )
+from agents.deliver import record_delivered, send_alert  # noqa: E402  (§4.3 confirmed-send recording)
 from litellm import completion  # noqa: E402
 from datetime import datetime  # noqa: E402
 
@@ -139,16 +141,19 @@ def generate_brief(config, sb, categories, topic_keywords):
             break
     print(f"  qualifying (rel>={chosen} or act>=2): {len(articles)}")
     if not articles:
-        return None, None
+        return None, None, []
     quiet = len(articles) < min_themes
 
     clusters, leftovers = cluster_by_topic_overlap(articles, max_themes, max_per_theme)
     if not clusters:
-        return None, None
+        return None, None, []
     highlights = pick_highlights(
         leftovers, int(config.get("writer_highlights_count", 8)),
         int(config.get("writer_highlights_min_relevance", 8)),
     )
+    selected_ids = list(dict.fromkeys(
+        [a["id"] for cl in clusters for a in cl] + [h["id"] for h in highlights]
+    ))
     max_chars = max(floor, min(ceiling, per_theme_chars * len(clusters)))
     briefing_date = datetime.now(JST).strftime("%Y-%m-%d (%H:%M JST)")
     system_prompt = load_prompt_files()
@@ -172,7 +177,7 @@ def generate_brief(config, sb, categories, topic_keywords):
     text = resp.choices[0].message.content.strip()
     if quiet:
         text = "_Quiet news day — fewer items than usual._\n\n" + text
-    return text, used
+    return text, used, selected_ids
 
 
 def translate(config, text, lang, translate_model):
@@ -200,6 +205,14 @@ def send_whatsapp(text, account, target):
            "--account", account, "--target", target, "--message", text, "--json"]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     return r.returncode, (r.stdout or "")[-400:], (r.stderr or "")[-200:]
+
+
+def confirmed_message_id(rc, stdout):
+    """A send is confirmed only if rc==0 AND the gateway returned a real messageId."""
+    if rc != 0:
+        return None
+    m = re.search(r'"messageId"\s*:\s*"?([^",}\s]+)', stdout or "")
+    return m.group(1) if m else None
 
 
 def main():
@@ -240,12 +253,13 @@ def main():
         key = frozenset(cats)
         if key not in cache:
             cache[key] = generate_brief(config, sb, cats, topic_keywords)
-        en, used = cache[key]
+        en, used, ids = cache[key]
         if en is None:
             print(f"  QUIET — nothing qualifies for {name}; skipping.")
             continue
         en_full = md_to_whatsapp(en)
         en_strip = strip_sources(en_full)
+        chat_ok = True  # did EVERY send for this chat confirm a messageId?
         for i, lang in enumerate(langs):
             base = en_full if i == 0 else en_strip
             text = base if lang == "en" else translate(config, base, lang, translate_model)[0]
@@ -254,8 +268,20 @@ def main():
             print(f"  [{name}/{lang}] {len(text)} chars -> {out_file(name, lang)}")
             if args.send:
                 rc, o, e = send_whatsapp(text, account, target)
-                print(f"    SENT rc={rc} {o} {e}")
-                any_posted = any_posted or rc == 0
+                mid = confirmed_message_id(rc, o)
+                print(f"    SENT rc={rc} messageId={mid} {o}")
+                if mid:
+                    any_posted = True
+                else:
+                    chat_ok = False
+                    send_alert(f"🚨 NewsFramer: WhatsApp send FAILED for {name}/{lang} "
+                               f"(rc={rc}) — recorded NOTHING for {name}.")
+        # §4.3: record this chat's delivered article_ids ONLY if EVERY send confirmed.
+        if args.send and chat_ok and ids:
+            n = record_delivered(sb, f"whatsapp:{name}", ids, None)
+            print(f"  recorded {n} delivered article_id(s) for whatsapp:{name}")
+        elif args.send and not chat_ok:
+            print(f"  NOT recorded for {name} (a send failed; alerted).")
     if not args.send:
         print("\nDRY RUN — nothing sent. Re-run with --send (or --send-saved to post the saved files).")
     return 0
