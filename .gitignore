@@ -42,3 +42,6 @@ BACKLOG.md
 
 # Local SQLite scratch / debug DBs — never commit (the real data layer is Supabase)
 *.db
+
+# Drop-report local store (spec §8.5) — runtime data, regenerated per brief
+data/drop_reports/

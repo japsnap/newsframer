@@ -9,6 +9,8 @@ Phase 2 will add post-draft generation in user voice.
 """
 
 import os
+import sys
+import json
 import time
 import yaml
 from collections import defaultdict
@@ -17,9 +19,24 @@ from litellm import completion
 from supabase import create_client
 from dotenv import load_dotenv
 
-from run_log import record_run
+# writer.py runs BOTH as a script (python agents/writer.py, agents/ on sys.path[0])
+# and as an imported module (run_whatsapp_brief.py does `from agents.writer import ...`,
+# with only the repo root on the path). Put this file's own dir on the path so the
+# sibling helpers below resolve in BOTH cases.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from run_log import record_run  # noqa: E402
+from llm_json import parse_json_obj  # noqa: E402
+from drop_reports import (  # noqa: E402
+    make_slug, is_woven, render_investigations_section, splice_investigations,
+)
 
 load_dotenv()
+
+try:  # Windows consoles default to cp1252 and crash printing 🔍 / non-latin glyphs.
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 # Asia/Tokyo (JST = UTC+9, no DST). The brief date/header must be JST, not UTC: a 06:00 JST
 # run is 21:00 UTC the prior day, so a UTC date would show YESTERDAY.
@@ -347,6 +364,161 @@ def _log_writer_skip(sb, reason, total_in_window):
     print(f"  Writer skip logged: {reason} (in-window={total_in_window})")
 
 
+# --- Drop-reports (spec 8.5, basic). Telegram-self path only; WhatsApp untouched. ---
+DROP_SUMMARY_SYSTEM = (
+    "You summarize an investigative-journalism / OSINT report for a personal news brief.\n"
+    'Return ONLY a JSON object: {"short": "...", "long": "..."}.\n'
+    "- short: ONE factual sentence, <= 280 characters, no hype, no speculation.\n"
+    "- long: 2-4 short paragraphs, <= 1200 characters: what the investigation found, the "
+    "method/evidence, who is involved, and why it matters.\n"
+    "Use ONLY facts in the provided article. No markdown fences, no commentary outside the JSON."
+)
+
+
+def load_investigative_ids(sb):
+    """Source ids whose category is 'investigative' (the drop-report sources, spec 8.5)."""
+    r = sb.table("sources").select("id").eq("category", "investigative").execute()
+    return {row["id"] for row in (r.data or [])}
+
+
+def load_drop_report_candidates(sb, window_hours, investigative_ids, exclude_account=None):
+    """Scored, non-delivered articles from investigative sources within a wider
+    (7-day) window. Mirrors load_window_scored_articles but scoped to drop sources,
+    so low-frequency investigative drops actually surface (spec 8.5; §4.3 dedup)."""
+    if not investigative_ids:
+        return []
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat()
+    inv = list(investigative_ids)
+    arts = []
+    for i in range(0, len(inv), 50):
+        chunk = inv[i:i + 50]
+        start = 0
+        while True:
+            r = (
+                sb.table("raw_articles")
+                .select("id, source_id, title, url, content_raw, published_at")
+                .in_("source_id", chunk)
+                .gte("published_at", cutoff)
+                .is_("deleted_at", "null")
+                .order("published_at", desc=True)
+                .range(start, start + 999)
+                .execute()
+            )
+            batch = r.data or []
+            arts.extend(batch)
+            if len(batch) < 1000:
+                break
+            start += 1000
+    if not arts:
+        return []
+    ids = [a["id"] for a in arts]
+    delivered = set()
+    if exclude_account:
+        for i in range(0, len(ids), 50):
+            d = (
+                sb.table("deliveries").select("article_id")
+                .eq("account", exclude_account).in_("article_id", ids[i:i + 50]).execute()
+            )
+            for row in (d.data or []):
+                if row.get("article_id"):
+                    delivered.add(row["article_id"])
+    cand_ids = [i for i in ids if i not in delivered]
+    scores = {}
+    for i in range(0, len(cand_ids), 50):
+        r2 = (
+            sb.table("analyst_scores")
+            .select("article_id, relevance_score, label, hypotheses, topics, actionability, "
+                    "perspective_invited, reasoning, differentiator")
+            .in_("article_id", cand_ids[i:i + 50]).execute()
+        )
+        for row in (r2.data or []):
+            scores[row["article_id"]] = row
+    out = []
+    for a in arts:
+        if a["id"] in delivered:
+            continue
+        s = scores.get(a["id"])
+        if s:
+            a["score"] = s
+            out.append(a)
+    return out
+
+
+def generate_drop_summary(article, model, completion_fn=completion):
+    """One cheap-model call -> {'short','long'} for a drop-report. Robust JSON parse;
+    injectable completion_fn so the dry run can stub it (no LLM spend)."""
+    content = (article.get("content_raw") or "")[:3000]
+    user = (
+        f"title: {article.get('title','')}\n"
+        f"source_url: {article.get('url','')}\n"
+        f"content:\n{content}"
+    )
+    resp = completion_fn(
+        model=model,
+        messages=[{"role": "system", "content": DROP_SUMMARY_SYSTEM},
+                  {"role": "user", "content": user}],
+        temperature=0.2, max_tokens=900,
+    )
+    parsed = parse_json_obj(resp.choices[0].message.content)
+    return {
+        "short": str(parsed.get("short") or "").strip()[:400],
+        "long": str(parsed.get("long") or "").strip()[:2000],
+    }
+
+
+def build_drops(drop_candidates, main_theme_topics, max_drops, model, sources_map,
+                completion_fn=completion):
+    """Pick the top drops, weave-flag each against the main theme, and generate
+    summaries. Returns dicts {article, render, store, woven}. Logs if more than
+    max_drops qualify (no silent cap). On a summary failure, falls back to the
+    analyst's own text rather than crashing the brief."""
+    ordered = sorted(drop_candidates, key=composite_score, reverse=True)
+    if len(ordered) > max_drops:
+        print(f"  DROP CAP: {len(ordered)} investigative articles qualified; keeping top {max_drops} "
+              f"(others wait for a later brief).")
+    chosen = ordered[:max_drops]
+    slugs = set()
+    out = []
+    for a in chosen:
+        topics = a["score"].get("topics") or []
+        woven = is_woven(topics, main_theme_topics)
+        slug = make_slug(a.get("title", ""), slugs)
+        slugs.add(slug)
+        source = sources_map.get(a.get("source_id"), "Unknown")
+        try:
+            summary = generate_drop_summary(a, model, completion_fn)
+        except Exception as e:
+            print(f"  WARN: drop summary failed for '{a.get('title','')[:50]}': {e}; using analyst text.")
+            s = a["score"]
+            summary = {
+                "short": (s.get("differentiator") or s.get("reasoning") or a.get("title", ""))[:280],
+                "long": (s.get("reasoning") or "")[:1200],
+            }
+        render = {"title": a.get("title", ""), "short": summary["short"],
+                  "source": source, "url": a.get("url", ""), "slug": slug}
+        store = {**render, "long": summary["long"], "woven": woven,
+                 "article_id": a["id"], "topics": topics}
+        out.append({"article": a, "render": render, "store": store, "woven": woven})
+    return out
+
+
+def persist_drop_reports(date_str, drop_store_list, base_dir, briefing_id=None):
+    """Write the day's drop reports to a local JSON store so the OpenClaw agent can
+    return the long form on 'more: <slug>'. Best-effort; never sinks the brief."""
+    try:
+        d = os.path.join(base_dir, "data", "drop_reports")
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, f"{date_str}.json")
+        payload = {"date": date_str, "briefing_id": briefing_id, "drops": drop_store_list}
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        print(f"  Drop-reports stored: {path} ({len(drop_store_list)} drop(s))")
+        return path
+    except Exception as e:
+        print(f"  WARN: could not persist drop reports (non-fatal): {e}")
+        return None
+
+
 def run_writer():
     config = load_config()
     sb = get_supabase()
@@ -382,6 +554,22 @@ def run_writer():
         sb, window_hours, exclude_account=delivery_account
     )
     sources_map = load_sources_map(sb)
+
+    # Drop-reports (spec 8.5): investigative-category sources are handled on a wider
+    # 7-day deduped window, never as plain highlights. Pull them OUT of the normal
+    # 24h pool first so nothing double-lists. No investigative sources -> all no-ops.
+    investigative_ids = load_investigative_ids(sb)
+    if investigative_ids:
+        before = len(candidates)
+        candidates = [a for a in candidates if a.get("source_id") not in investigative_ids]
+        if before != len(candidates):
+            print(f"  Drop sources: pulled {before - len(candidates)} investigative article(s) "
+                  f"from the normal pool (handled as drops).")
+    drop_window = int(config.get("drop_report_window_hours", 168))
+    drop_candidates = load_drop_report_candidates(
+        sb, drop_window, investigative_ids, exclude_account=delivery_account
+    )
+    print(f"  Drop-report candidates (investigative, {drop_window}h, non-delivered): {len(drop_candidates)}")
 
     # §4.5 relevance backoff: lower the threshold ONLY within the 24h window (never outside),
     # down to writer_relevance_floor, until at least min_themes articles qualify.
@@ -431,6 +619,25 @@ def run_writer():
         _log_writer_skip(sb, "no_clusters", total_in_window)
         return
 
+    # Drop-reports: weave-flag each against the main theme (themes[0]) and generate
+    # short+long summaries (eager). Woven drops are added into the main theme cluster
+    # so the LLM synthesizes them in; ALL drops also render in the Investigations
+    # section below. Empty drop_candidates -> brief identical to today's.
+    drop_model = config.get("drop_report_model", "gemini/gemini-2.5-flash-lite")
+    drop_max = int(config.get("drop_report_max", 3))
+    main_theme_topics = set()
+    if clusters:
+        for a in clusters[0]:
+            main_theme_topics |= set(a["score"].get("topics") or [])
+    drops = build_drops(drop_candidates, main_theme_topics, drop_max, drop_model, sources_map) \
+        if drop_candidates else []
+    if drops:
+        woven_n = sum(1 for d in drops if d["woven"])
+        print(f"  Drops: {len(drops)} ({woven_n} woven into main theme, {len(drops) - woven_n} standalone)")
+        for d in drops:
+            if d["woven"] and clusters:
+                clusters[0].append(d["article"])
+
     # Fix 2: cap scales with the themes the brief actually produces, clamped floor..ceiling.
     max_chars = max(max_chars_floor, min(max_chars_ceiling, per_theme_chars * len(clusters)))
     print(f"  Char cap: {per_theme_chars} x {len(clusters)} themes = {per_theme_chars * len(clusters)} "
@@ -467,6 +674,12 @@ def run_writer():
     if quiet_day:
         briefing_text = "_Quiet news day — fewer items than usual._\n\n" + briefing_text
 
+    # Splice the deterministic Investigations section (drops always surface here,
+    # whether or not they were also woven into the main theme). No drops -> no-op.
+    briefing_text = splice_investigations(
+        briefing_text, render_investigations_section([d["render"] for d in drops])
+    )
+
     usage = getattr(response, "usage", None)
     t_in = getattr(usage, "prompt_tokens", 0) if usage else 0
     t_out = getattr(usage, "completion_tokens", 0) if usage else 0
@@ -481,7 +694,11 @@ def run_writer():
 
     # Store. Record which article IDs went into the brief (clusters + highlights) so the
     # delivery layer can mark them delivered (§4.3) once the send is confirmed.
-    selected_ids = [a["id"] for cluster in clusters for a in cluster] + [h["id"] for h in highlights]
+    selected_ids = (
+        [a["id"] for cluster in clusters for a in cluster]
+        + [h["id"] for h in highlights]
+        + [d["article"]["id"] for d in drops]
+    )
     selected_ids = list(dict.fromkeys(selected_ids))
     content_col = f"content_{lang}"
     insert_row = {
@@ -494,6 +711,12 @@ def run_writer():
     result = sb.table("briefings").insert(insert_row).execute()
     briefing_id = result.data[0]["id"] if result.data else None
     print(f"Saved briefing id={briefing_id} ({len(selected_ids)} article_ids)")
+
+    if drops:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        persist_drop_reports(
+            now_jst.date().isoformat(), [d["store"] for d in drops], base_dir, briefing_id
+        )
 
     record_run(sb, {
         "agent_name": "writer",

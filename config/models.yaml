@@ -61,6 +61,11 @@ writer_max_chars_ceiling: 16000         # Fix 2: cap never above this
 writer_highlights_count: 8         # target number of highlights
 writer_highlights_min_relevance: 8 # only rel >= 8 articles become highlights
 
+# Drop-reports (spec §8.5, basic version — Telegram-self only)
+drop_report_window_hours: 168      # 7-day deduped window for investigative drops (explicit exception to the §4.5 24h selection rule)
+drop_report_max: 3                 # max drops per brief; logs overflow (no silent cap)
+drop_report_model: "gemini/gemini-2.5-flash-lite"  # cheap model for the short+long drop summaries
+
 # Deduplicator settings
 deduplicator_embedding_model: "gemini/gemini-embedding-001"
 deduplicator_embedding_dimensions: 768
