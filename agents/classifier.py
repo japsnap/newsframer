@@ -11,7 +11,6 @@ Logs the run to agent_runs with tokens, cost, duration.
 """
 
 import os
-import re
 import json
 import time
 import yaml
@@ -19,6 +18,9 @@ from datetime import datetime, timezone
 from litellm import completion
 from supabase import create_client
 from dotenv import load_dotenv
+
+from llm_json import parse_json_list
+from run_log import record_run
 
 load_dotenv()
 
@@ -88,11 +90,11 @@ Duplicate topic detection (within this batch only):
 - For each article in a duplicate cluster, list the OTHER article_ids in the cluster under `duplicate_topic_ids`.
 - If a duplicate cluster covers an IMMEDIATE-worthy event, all members may still be tagged IMMEDIATE; the deduplication step downstream picks the representative.
 
-Output ONLY valid JSON. No markdown fences, no commentary. Schema:
+Output ONLY valid JSON in an ARRAY format. No markdown fences, no commentary. ALWAYS return an array, even for a single article. Schema:
 [
   {"article_id": "<uuid>", "branch": "IMMEDIATE" | "KEEP_WARM", "duplicate_topic_ids": ["<uuid>", ...]}
 ]
-Every input article must appear exactly once in the output."""
+Every input article must appear exactly once in the output as an array element."""
 
 
 def build_user_prompt(batch, sources_map):
@@ -112,16 +114,6 @@ def build_user_prompt(batch, sources_map):
     return "\n".join(lines)
 
 
-# --- JSON extraction (Gemini sometimes wraps in ```json fences) ---
-def extract_json(raw: str):
-    raw = raw.strip()
-    # Strip ```json ... ``` or ``` ... ``` fences
-    fence_match = re.match(r"^```(?:json)?\s*(.*?)\s*```$", raw, re.DOTALL | re.IGNORECASE)
-    if fence_match:
-        raw = fence_match.group(1).strip()
-    return json.loads(raw)
-
-
 # --- LLM call ---
 def classify_batch(batch, sources_map, model):
     user_prompt = build_user_prompt(batch, sources_map)
@@ -134,7 +126,9 @@ def classify_batch(batch, sources_map, model):
         temperature=LLM_TEMPERATURE,
     )
     raw = response.choices[0].message.content
-    parsed = extract_json(raw)
+    # Always a list of dicts; a single-object / fenced / prose-wrapped reply is
+    # coerced rather than crashing apply_classification (2026-06-11 incident).
+    parsed = parse_json_list(raw)
 
     usage = getattr(response, "usage", None)
     tokens_in = getattr(usage, "prompt_tokens", 0) if usage else 0
@@ -262,7 +256,13 @@ def run_classifier():
     status = "success" if failed_batches == 0 else "partial"
     error_msg = f"{failed_batches} batch(es) failed" if failed_batches else None
 
-    sb.table("agent_runs").insert({
+    # Loud on silent data loss: a dropped batch / skipped article means the brief
+    # is thinner than it should be, which otherwise looks identical to a clean run.
+    if failed_batches or total_skipped:
+        print(f"  ALERT: classifier dropped data — {failed_batches} batch(es) failed, "
+              f"{total_skipped} article(s) skipped; brief may be thinner than usual.")
+
+    record_run(sb, {
         "agent_name": "classifier",
         "model_used": model,
         "tokens_in": total_tokens_in,
@@ -271,7 +271,7 @@ def run_classifier():
         "duration_ms": duration_ms,
         "status": status,
         "error": error_msg,
-    }).execute()
+    })
 
     print(f"\nClassifier done.")
     print(f"  Applied: {total_applied}")

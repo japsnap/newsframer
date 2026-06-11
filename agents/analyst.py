@@ -15,13 +15,15 @@ Idempotent via UNIQUE(article_id).
 """
 
 import os
-import re
 import json
 import time
 import yaml
 from litellm import completion
 from supabase import create_client
 from dotenv import load_dotenv
+
+from llm_json import parse_json_obj
+from run_log import record_run
 
 load_dotenv()
 
@@ -180,14 +182,6 @@ def build_user_prompt(article, sources_map):
     )
 
 
-def extract_json(raw):
-    raw = raw.strip()
-    m = re.match(r"^```(?:json)?\s*(.*?)\s*```$", raw, re.DOTALL | re.IGNORECASE)
-    if m:
-        raw = m.group(1).strip()
-    return json.loads(raw)
-
-
 def analyze_one(article, context_block, sources_map, model):
     """LLM call with retry. Returns (parsed_dict, tokens_in, tokens_out)."""
     user_prompt = build_user_prompt(article, sources_map)
@@ -202,7 +196,9 @@ def analyze_one(article, context_block, sources_map, model):
         try:
             response = completion(model=model, messages=messages, temperature=LLM_TEMPERATURE)
             raw = response.choices[0].message.content
-            parsed = extract_json(raw)
+            # Always a single dict; a 1-item array / fenced / prose-wrapped reply
+            # is coerced. A non-object reply raises -> retry, then per-article skip.
+            parsed = parse_json_obj(raw)
             usage = getattr(response, "usage", None)
             t_in = getattr(usage, "prompt_tokens", 0) if usage else 0
             t_out = getattr(usage, "completion_tokens", 0) if usage else 0
@@ -356,7 +352,12 @@ def run_analyst():
     status = "success" if failed == 0 else "partial"
     err = f"{failed} article(s) failed" if failed else None
 
-    sb.table("agent_runs").insert({
+    # Loud on silent data loss: skipped articles drop out of scoring entirely.
+    if failed:
+        print(f"  ALERT: analyst dropped {failed}/{len(articles)} article(s) "
+              f"(unscored -> absent from the brief).")
+
+    record_run(sb, {
         "agent_name": "analyst",
         "model_used": model,
         "tokens_in": total_in,
@@ -365,7 +366,7 @@ def run_analyst():
         "duration_ms": duration_ms,
         "status": status,
         "error": err,
-    }).execute()
+    })
 
     print(f"\nAnalyst done.")
     print(f"  Inserted: {inserted}")

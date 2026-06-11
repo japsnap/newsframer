@@ -36,3 +36,9 @@ Thumbs.db
 # Real local config — *.example.* templates are committed; real instances stay local
 user_context.json
 config/whatsapp_deliveries.yaml
+
+# Private backlog — never commit
+BACKLOG.md
+
+# Local SQLite scratch / debug DBs — never commit (the real data layer is Supabase)
+*.db

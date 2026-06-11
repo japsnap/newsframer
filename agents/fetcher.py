@@ -12,12 +12,20 @@ import yaml
 import os
 import time
 import hashlib
+import random
 from datetime import datetime, timezone, timedelta
 from bs4 import BeautifulSoup
 from supabase import create_client
 from dotenv import load_dotenv
 
+from run_log import record_run
+
 load_dotenv()
+
+# Sources that errored during this run (fetch_rss / fetch_web swallow per-source
+# errors so one bad feed can't sink the rest). Reset per run by run_fetcher;
+# used to report an honest agent_runs status instead of always "success".
+FETCH_ERRORS = []
 
 # §8.7: the distributed scrape calendar is keyed to the JST weekday (the brief runs 06:00 JST).
 JST = timezone(timedelta(hours=9))
@@ -158,6 +166,7 @@ def fetch_rss(source: dict, cutoff: datetime, max_articles: int) -> list:
                 break
 
     except Exception as e:
+        FETCH_ERRORS.append(source.get("name", source.get("id", "?")))
         print(f"  RSS error for {source['name']}: {e}")
 
     return articles
@@ -191,6 +200,7 @@ def fetch_web(source: dict, cutoff: datetime, max_articles: int) -> list:
             })
 
     except Exception as e:
+        FETCH_ERRORS.append(source.get("name", source.get("id", "?")))
         print(f"  Web scrape error for {source['name']}: {e}")
 
     return articles
@@ -212,6 +222,7 @@ def run_fetcher():
     start_time = time.time()
 
     print("OpenClaw Fetcher starting...")
+    FETCH_ERRORS.clear()
 
     existing = sb.table("raw_articles").select("id").limit(1).execute()
     is_first_run = len(existing.data) == 0
@@ -226,7 +237,7 @@ def run_fetcher():
 
     priority_types = config.get("priority_source_types", ["vc_blog", "research", "blog"])
     max_per_source = config.get("max_articles_per_source", 10)
-    max_total = config.get("max_articles_total", 150)
+    safety_ceiling = int(config.get("fetch_safety_ceiling", 600))
 
     priority_sources = [s for s in sources if s.get("source_type") in priority_types]
     news_sources = [s for s in sources if s.get("source_type") not in priority_types]
@@ -242,18 +253,25 @@ def run_fetcher():
 
     print(f"\nFetching news sources ({len(news_sources)})...")
     for source in news_sources:
-        remaining = max_total - len(all_articles)
-        if remaining <= 0:
-            print(f"  Total limit reached ({max_total}). Stopping news fetch.")
-            break
-
         weight = source.get("weight", 1.0)
-        source_limit = min(int(max_per_source * weight), remaining)
+        source_limit = max(1, int(max_per_source * weight))
 
         articles, note = fetch_one(config, source, is_first_run, today_jst, source_limit)
         print(f"  {source['name']} (weight={weight}, limit={source_limit})... {note}")
         if articles:
             all_articles.extend(articles)
+
+    # Article cap: NO order-based truncation under normal load — every active source is fetched in
+    # full (each to its own per-source limit). Only a high SAFETY CEILING guards a runaway bug; if
+    # exceeded, cut RANDOMLY across ALL fetched articles (never by source order), so no source — or a
+    # story that's just concluding — is systematically starved.
+    fetched_total = len(all_articles)
+    if fetched_total > safety_ceiling:
+        all_articles = random.sample(all_articles, safety_ceiling)
+        print(f"\n  SAFETY CEILING hit: {fetched_total} > {safety_ceiling}; randomly sampled down to "
+              f"{safety_ceiling} (this is abnormal — likely a runaway bug; investigate).")
+    else:
+        print(f"\n  Fetched {fetched_total} articles (safety ceiling {safety_ceiling}; no truncation).")
 
     all_articles = deduplicate_batch(all_articles)
     print(f"\nAfter deduplication: {len(all_articles)} articles")
@@ -261,6 +279,7 @@ def run_fetcher():
     saved = 0
     skipped_junk = 0
     skipped_dup = 0
+    insert_errors = 0
 
     for article in all_articles:
         if is_junk_url(article["url"], article["title"], junk_patterns):
@@ -273,20 +292,31 @@ def run_fetcher():
             sb.table("raw_articles").insert(article).execute()
             saved += 1
         except Exception as e:
+            insert_errors += 1
             print(f"  Insert error: {e}")
 
     duration_ms = int((time.time() - start_time) * 1000)
 
-    sb.table("agent_runs").insert({
+    # Honest status: do NOT hard-code "success". Feed errors (swallowed per source)
+    # and insert errors both mean we fetched less than intended.
+    feed_errors = len(FETCH_ERRORS)
+    status = "success" if (feed_errors == 0 and insert_errors == 0) else "partial"
+    error = None
+    if status == "partial":
+        error = f"{feed_errors} source(s) failed to fetch, {insert_errors} insert error(s)"
+        print(f"  ALERT: fetcher degraded — {error}"
+              + (f"; sources: {', '.join(FETCH_ERRORS[:10])}" if FETCH_ERRORS else ""))
+
+    record_run(sb, {
         "agent_name": "fetcher",
         "model_used": "none",
         "tokens_in": 0,
         "tokens_out": 0,
         "cost_usd": 0.0,
         "duration_ms": duration_ms,
-        "status": "success",
-        "error": None,
-    }).execute()
+        "status": status,
+        "error": error,
+    })
 
     print(f"\nFetcher done.")
     print(f"  Saved: {saved}")

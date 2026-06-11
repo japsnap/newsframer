@@ -8,13 +8,15 @@ BASE_DIR = Path(__file__).parent
 import sys
 PYTHON = sys.executable
 
+# NOTE: run_brief.py is the canonical OpenClaw entrypoint. The Dispatcher is
+# deleted per spec §3.2 — OpenClaw delivers — so it is NOT run here. This script
+# remains for manual local full builds only.
 AGENTS = [
-("fetcher",      [PYTHON, str(BASE_DIR / "agents/fetcher.py")]),
+    ("fetcher",      [PYTHON, str(BASE_DIR / "agents/fetcher.py")]),
     ("classifier",   [PYTHON, str(BASE_DIR / "agents/classifier.py")]),
     ("deduplicator", [PYTHON, str(BASE_DIR / "agents/deduplicator.py"), "--apply"]),
     ("analyst",      [PYTHON, str(BASE_DIR / "agents/analyst.py")]),
     ("writer",       [PYTHON, str(BASE_DIR / "agents/writer.py")]),
-    ("dispatcher",   [PYTHON, str(BASE_DIR / "agents/dispatcher.py")]),
 ]
 
 def run_agent(name, cmd):

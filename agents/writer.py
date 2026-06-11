@@ -17,6 +17,8 @@ from litellm import completion
 from supabase import create_client
 from dotenv import load_dotenv
 
+from run_log import record_run
+
 load_dotenv()
 
 # Asia/Tokyo (JST = UTC+9, no DST). The brief date/header must be JST, not UTC: a 06:00 JST
@@ -493,15 +495,15 @@ def run_writer():
     briefing_id = result.data[0]["id"] if result.data else None
     print(f"Saved briefing id={briefing_id} ({len(selected_ids)} article_ids)")
 
-    sb.table("agent_runs").insert({
+    record_run(sb, {
         "agent_name": "writer",
-        "model_used": model,
+        "model_used": used_model,
         "tokens_in": t_in,
         "tokens_out": t_out,
         "cost_usd": round(cost, 6),
         "duration_ms": duration_ms,
         "status": "success",
-    }).execute()
+    })
 
 
 if __name__ == "__main__":
