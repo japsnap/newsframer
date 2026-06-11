@@ -28,6 +28,7 @@ import sys
 import argparse
 from datetime import datetime, timezone, timedelta
 
+import yaml
 import requests
 from dotenv import load_dotenv
 from supabase import create_client
@@ -42,9 +43,19 @@ try:
 except Exception:
     pass
 
+
+def _load_cfg():
+    try:
+        with open(BASE_DIR / "config" / "models.yaml", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except Exception:
+        return {}
+
+
 JST = timezone(timedelta(hours=9))
 ENGINES = {"fetcher", "classifier", "deduplicator", "analyst", "writer"}
-SLOT_HOUR = {"telegram": 6, "whatsapp": 11}  # JST start hour per slot
+# JST start hour per slot — sourced from config (default reproduces prior behaviour).
+SLOT_HOUR = _load_cfg().get("slot_hours") or {"telegram": 6, "whatsapp": 11}
 WRITER_SKIP_STATUSES = {"quiet_day_no_articles", "no_clusters"}
 BAD_STATUSES = {"partial", "error", "failed"}
 

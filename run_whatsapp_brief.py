@@ -166,12 +166,12 @@ def generate_brief(config, sb, categories, topic_keywords):
     used = model
     print(f"  generating with {model} ({len(clusters)} themes, {len(highlights)} highlights)...")
     try:
-        resp = completion(model=model, messages=msgs, temperature=0.3, max_tokens=4500)
+        resp = completion(model=model, messages=msgs, temperature=float(config.get("whatsapp_temperature", 0.3)), max_tokens=int(config.get("whatsapp_max_tokens", 4500)))
     except Exception as e:
         if fallback_model and fallback_model != model:
             print(f"  PRIMARY {model} failed ({e}); falling back to {fallback_model}")
             used = fallback_model
-            resp = completion(model=used, messages=msgs, temperature=0.3, max_tokens=4500)
+            resp = completion(model=used, messages=msgs, temperature=float(config.get("whatsapp_temperature", 0.3)), max_tokens=int(config.get("whatsapp_max_tokens", 4500)))
         else:
             raise
     text = resp.choices[0].message.content.strip()
@@ -192,11 +192,11 @@ def translate(config, text, lang, translate_model):
     msgs = [{"role": "system", "content": sys_p}, {"role": "user", "content": text}]
     used = translate_model
     try:
-        resp = completion(model=translate_model, messages=msgs, temperature=0.2, max_tokens=6000)
+        resp = completion(model=translate_model, messages=msgs, temperature=float(config.get("whatsapp_translate_temperature", 0.2)), max_tokens=int(config.get("whatsapp_translate_max_tokens", 6000)))
     except Exception as e:
         print(f"  translate {translate_model} failed ({e}); falling back to {fallback}")
         used = fallback
-        resp = completion(model=used, messages=msgs, temperature=0.2, max_tokens=6000)
+        resp = completion(model=used, messages=msgs, temperature=float(config.get("whatsapp_translate_temperature", 0.2)), max_tokens=int(config.get("whatsapp_translate_max_tokens", 6000)))
     return resp.choices[0].message.content.strip(), used
 
 

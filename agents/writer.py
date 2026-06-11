@@ -50,6 +50,20 @@ def load_config():
         return yaml.safe_load(f)
 
 
+# --- Tunables (sourced from config; defaults reproduce prior behaviour). See config/models.yaml. ---
+try:
+    _CFG = load_config()
+except Exception:
+    _CFG = {}
+THEME_SNIPPET_CHARS = int(_CFG.get("writer_theme_snippet_chars", 600))
+HIGHLIGHT_SNIPPET_CHARS = int(_CFG.get("writer_highlight_snippet_chars", 400))
+DROP_CONTENT_CHARS = int(_CFG.get("drop_report_content_chars", 3000))
+DROP_TEMPERATURE = float(_CFG.get("drop_report_temperature", 0.2))
+DROP_MAX_TOKENS = int(_CFG.get("drop_report_max_tokens", 900))
+DROP_SHORT_MAX_CHARS = int(_CFG.get("drop_report_short_max_chars", 400))
+DROP_LONG_MAX_CHARS = int(_CFG.get("drop_report_long_max_chars", 2000))
+
+
 def load_prompt_files():
     """Load the four prompt files. User edits these to customize Writer behavior."""
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -301,7 +315,7 @@ def build_articles_block(clusters, sources_map, by_hypothesis_id):
                 f"  analyst_reasoning: {s.get('reasoning','') or '(none)'}\n"
                 f"  hypothesis_matches: {hyp_str}\n"
                 f"  perspective_invited: {s.get('perspective_invited')}\n"
-                f"  content_snippet: {(a.get('content_raw') or '')[:600].replace(chr(10), ' ')}"
+                f"  content_snippet: {(a.get('content_raw') or '')[:THEME_SNIPPET_CHARS].replace(chr(10), ' ')}"
             )
     return "\n".join(lines)
 
@@ -322,7 +336,7 @@ def build_highlights_block(highlights, sources_map):
             f"  topics: {', '.join(s.get('topics') or [])}\n"
             f"  differentiator: {s.get('differentiator','') or '(none)'}\n"
             f"  analyst_reasoning: {s.get('reasoning','') or '(none)'}\n"
-            f"  content_snippet: {(h.get('content_raw') or '')[:400].replace(chr(10), ' ')}"
+            f"  content_snippet: {(h.get('content_raw') or '')[:HIGHLIGHT_SNIPPET_CHARS].replace(chr(10), ' ')}"
         )
     return "\n".join(lines)
 
@@ -454,7 +468,7 @@ def load_drop_report_candidates(sb, window_hours, investigative_ids, exclude_acc
 def generate_drop_summary(article, model, completion_fn=completion):
     """One cheap-model call -> {'short','long'} for a drop-report. Robust JSON parse;
     injectable completion_fn so the dry run can stub it (no LLM spend)."""
-    content = (article.get("content_raw") or "")[:3000]
+    content = (article.get("content_raw") or "")[:DROP_CONTENT_CHARS]
     user = (
         f"title: {article.get('title','')}\n"
         f"source_url: {article.get('url','')}\n"
@@ -464,12 +478,12 @@ def generate_drop_summary(article, model, completion_fn=completion):
         model=model,
         messages=[{"role": "system", "content": DROP_SUMMARY_SYSTEM},
                   {"role": "user", "content": user}],
-        temperature=0.2, max_tokens=900,
+        temperature=DROP_TEMPERATURE, max_tokens=DROP_MAX_TOKENS,
     )
     parsed = parse_json_obj(resp.choices[0].message.content)
     return {
-        "short": str(parsed.get("short") or "").strip()[:400],
-        "long": str(parsed.get("long") or "").strip()[:2000],
+        "short": str(parsed.get("short") or "").strip()[:DROP_SHORT_MAX_CHARS],
+        "long": str(parsed.get("long") or "").strip()[:DROP_LONG_MAX_CHARS],
     }
 
 
@@ -551,6 +565,8 @@ def run_writer():
     bundle_cap = int(config.get("bundle_theme_cap", 2))
     theme_multiplier = float(config.get("theme_count_multiplier", 1.5))
     theme_total_max = int(config.get("theme_count_max", 10))
+    writer_temperature = float(config.get("writer_temperature", 0.3))
+    writer_max_tokens = int(config.get("writer_max_tokens", 4500))
 
     print("OpenClaw Writer starting...")
     print(f"  Model:          {model}")
@@ -688,12 +704,12 @@ def run_writer():
     used_model = model
     print(f"\nGenerating briefing with {model}...")
     try:
-        response = completion(model=model, messages=messages, temperature=0.3, max_tokens=4500)
+        response = completion(model=model, messages=messages, temperature=writer_temperature, max_tokens=writer_max_tokens)
     except Exception as primary_err:
         if fallback_model and fallback_model != model:
             print(f"  PRIMARY {model} FAILED: {primary_err}\n  Falling back to {fallback_model}...")
             used_model = fallback_model
-            response = completion(model=used_model, messages=messages, temperature=0.3, max_tokens=4500)
+            response = completion(model=used_model, messages=messages, temperature=writer_temperature, max_tokens=writer_max_tokens)
         else:
             raise
     briefing_text = response.choices[0].message.content.strip()

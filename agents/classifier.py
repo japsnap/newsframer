@@ -24,11 +24,6 @@ from run_log import record_run
 
 load_dotenv()
 
-# --- Constants ---
-BATCH_SIZE = 10
-CONTENT_SNIPPET_CHARS = 500
-LLM_TEMPERATURE = 0.2
-
 
 # --- Config ---
 def load_config():
@@ -36,6 +31,16 @@ def load_config():
     config_path = os.path.join(base_dir, "config", "models.yaml")
     with open(config_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+# --- Tunables (sourced from config; defaults reproduce prior behaviour). See config/models.yaml. ---
+try:
+    _CFG = load_config()
+except Exception:
+    _CFG = {}
+BATCH_SIZE = int(_CFG.get("classifier_batch_size", 10))
+CONTENT_SNIPPET_CHARS = int(_CFG.get("classifier_content_snippet_chars", 500))
+LLM_TEMPERATURE = float(_CFG.get("classifier_temperature", 0.2))
 
 
 # --- Supabase ---

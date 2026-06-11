@@ -38,6 +38,15 @@ def load_config():
         return yaml.safe_load(f)
 
 
+# --- Tunables (sourced from config; defaults reproduce prior behaviour). See config/models.yaml. ---
+try:
+    _CFG = load_config()
+except Exception:
+    _CFG = {}
+EMBED_TEXT_CHARS = int(_CFG.get("deduplicator_embed_text_chars", 500))
+PRICE_EVENT_TEXT_CHARS = int(_CFG.get("deduplicator_price_event_text_chars", 300))
+
+
 def get_supabase():
     return create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY"))
 
@@ -68,7 +77,7 @@ def fetch_articles(sb, window_hours):
 
 def build_text_for_embedding(article):
     title = article.get("title") or ""
-    content = (article.get("content_raw") or "")[:500]
+    content = (article.get("content_raw") or "")[:EMBED_TEXT_CHARS]
     return f"{title}\n\n{content}".strip()
 
 
@@ -199,7 +208,7 @@ def cluster_time_span_hours(members):
 
 
 def has_price_event_keywords(article):
-    text = ((article.get("title") or "") + " " + (article.get("content_raw") or "")[:300]).lower()
+    text = ((article.get("title") or "") + " " + (article.get("content_raw") or "")[:PRICE_EVENT_TEXT_CHARS]).lower()
     return any(kw in text for kw in PRICE_EVENT_KEYWORDS)
 
 

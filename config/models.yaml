@@ -81,6 +81,53 @@ bundle_theme_cap: 2                # max themes any single bundle may take (cove
 theme_count_multiplier: 1.5        # total Telegram themes = ceil(multiplier * number of active bundles); 5 bundles -> 8
 theme_count_max: 10                # absolute safety ceiling on total themes
 
+# ============================================================================
+# Tunables — NOTHING below is hard-coded in code; every value here is read with
+# config.get(<key>, <this default>). Defaults reproduce the current behaviour, so
+# changing your topic set / scale only means editing this file. Anyone reusing this
+# repo tunes here, not in the source or the prompt files.
+# ============================================================================
+
+# --- LLM call parameters (per agent) ---
+writer_temperature: 0.3
+writer_max_tokens: 4500
+classifier_temperature: 0.2
+analyst_temperature: 0.2
+drop_report_temperature: 0.2
+drop_report_max_tokens: 900
+whatsapp_temperature: 0.3
+whatsapp_max_tokens: 4500
+whatsapp_translate_temperature: 0.2
+whatsapp_translate_max_tokens: 6000
+
+# --- Content snippet lengths fed to the LLM (characters) ---
+classifier_content_snippet_chars: 500
+analyst_content_snippet_chars: 1500
+writer_theme_snippet_chars: 600
+writer_highlight_snippet_chars: 400
+drop_report_content_chars: 3000
+
+# --- Batch / retry / output-truncation ---
+classifier_batch_size: 10
+analyst_max_retries: 3
+analyst_retry_backoff_seconds: 2
+analyst_reasoning_max_chars: 500
+analyst_differentiator_max_chars: 300
+drop_report_short_max_chars: 400
+drop_report_long_max_chars: 2000
+
+# --- Deduplicator text lengths (characters) ---
+deduplicator_embed_text_chars: 500
+deduplicator_price_event_text_chars: 300
+
+# --- Delivery ---
+telegram_message_limit: 3800       # per-message char cap (Telegram hard cap is 4096)
+
+# --- Run-health watchdog: slot start hours (JST; keep in step with the cron schedules) ---
+slot_hours:
+  telegram: 6
+  whatsapp: 11
+
 # Deduplicator settings
 deduplicator_embedding_model: "gemini/gemini-embedding-001"
 deduplicator_embedding_dimensions: 768

@@ -15,9 +15,21 @@ import re
 import json
 import subprocess
 
+import yaml
 import requests
 
-TELEGRAM_LIMIT = 3800  # Telegram hard cap is 4096; stay under it with headroom.
+
+def _load_cfg():
+    try:
+        p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "models.yaml")
+        with open(p, encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except Exception:
+        return {}
+
+
+# Sourced from config (default reproduces prior behaviour). Telegram hard cap is 4096.
+TELEGRAM_LIMIT = int(_load_cfg().get("telegram_message_limit", 3800))
 
 
 # --- pure: send confirmation + the record/alert decision -------------------

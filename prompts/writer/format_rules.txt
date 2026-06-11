@@ -2,18 +2,18 @@ OUTPUT FORMAT:
 
 Structure:
 1. Header line: `# NewsFramer Briefing — <date>`
-2. For each theme (3 to 5 themes total), one section.
+2. Produce EXACTLY the number of themes given in the instructions below — one section per theme.
 3. Each theme section structure:
-   - `## <Descriptive theme title>` — title should describe the actual content, e.g. "Bitcoin slides under $77K amid bond yield pressure" rather than "Crypto Markets".
+   - `## <Descriptive theme title>` — describe the actual content (e.g. "Bitcoin Slides Under $77K Amid Bond Yield Pressure", not "Crypto Markets"). Use Title Case: capitalize the first letter of every major word (keep short joining words like a, an, the, of, to, in, on, as, and, or, for lowercase unless first). Keep acronyms, tickers, and product names in their established casing (US, AI, CISA, xAI, DeFi, NATO, ETF).
    - 1 to 3 paragraphs of multi-source fact synthesis. Each paragraph 3-6 sentences.
    - If any article in this theme has a hypothesis match, include a line: `**Hypothesis check:** <hypothesis topic> (<stance>) — <article title> [N] aligns / challenges this view.`
    - If any article has a notable differentiator from Analyst, weave it into the synthesis. Do not list differentiators as a separate block.
    - End section with `**Articles:**` followed by a numbered list of articles in this theme. Each entry: `[N] [<title>](<url>) — <source name>`
 
 LENGTH LIMITS:
-- Total briefing must not exceed 7000 characters. Total briefing must be UNDER 7000 characters including the footer. Count carefully. If you would exceed, shorten paragraphs proportionally.
-- Aim for 3-4 themes typically. Use 5 only if material warrants it.
-- Each theme 250-600 words.
+- Stay UNDER the Hard character limit given in the instructions below (it includes the footer). Count carefully; if you would exceed, shorten paragraphs proportionally.
+- Produce EXACTLY the number of themes and highlights given in the instructions — do not add or drop any.
+- Divide the character budget across the themes so the whole stays within the limit; a richer theme may run longer than a thin one.
 - Hypothesis check lines are mandatory when applicable. Do not skip.
 
 CITATION RULES:
@@ -25,6 +25,7 @@ HIGHLIGHTS SECTION (after themes, before footer):
 - Add `## Highlights` section after all theme sections.
 - Each highlight = ONE article that did NOT make it into any theme but is high-relevance (provided in input as HIGHLIGHTS list).
 - Format per highlight: `- **<title>** — 1-2 sentence factual summary. [<source name>](<url>)`
+- Put <title> in the SAME Title Case as the theme headings (capitalize major words; keep acronyms/tickers/product casing), even if the source headline uses sentence case. Change only capitalization, not wording; leave text inside quotation marks verbatim.
 - Order highlights by relevance descending.
 - Cite source inline, not as footnotes — these are single-article items.
 - Do NOT add commentary, hot takes, or speculation. Summary must derive from article content + differentiator only.
@@ -34,7 +35,5 @@ FOOTER (after Highlights):
   `---`
   `_Briefing generated from <total_input> articles. <relevant_count> made the relevance cutoff. <theme_count> themes, <highlight_count> highlights._`
 
-LENGTH:
-- Total briefing must not exceed 8500 characters.
-- Themes: 3-5, 250-600 words each.
-- Highlights: 5-10 items, 100-200 chars per item.
+LENGTH (reminder):
+- The theme count, highlight count, and character limit are ALL provided in the instructions below. Follow those exact numbers — do not assume any fixed count or length.

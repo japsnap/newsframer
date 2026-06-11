@@ -27,16 +27,24 @@ from run_log import record_run
 
 load_dotenv()
 
-LLM_TEMPERATURE = 0.2
-CONTENT_SNIPPET_CHARS = 1500
-MAX_RETRIES = 3
-RETRY_BACKOFF_SECONDS = 2
-
 
 def load_config():
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with open(os.path.join(base_dir, "config", "models.yaml"), "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+# --- Tunables (sourced from config; defaults reproduce prior behaviour). See config/models.yaml. ---
+try:
+    _CFG = load_config()
+except Exception:
+    _CFG = {}
+LLM_TEMPERATURE = float(_CFG.get("analyst_temperature", 0.2))
+CONTENT_SNIPPET_CHARS = int(_CFG.get("analyst_content_snippet_chars", 1500))
+MAX_RETRIES = int(_CFG.get("analyst_max_retries", 3))
+RETRY_BACKOFF_SECONDS = float(_CFG.get("analyst_retry_backoff_seconds", 2))
+REASONING_MAX_CHARS = int(_CFG.get("analyst_reasoning_max_chars", 500))
+DIFFERENTIATOR_MAX_CHARS = int(_CFG.get("analyst_differentiator_max_chars", 300))
 
 
 def load_analyst_prompt():
@@ -264,8 +272,8 @@ def validate_and_clean(parsed, hypothesis_ids, article):
     if not isinstance(pi, bool):
         pi = (rel >= 7 and label in {"NEW_SIGNAL", "CONFIRMS_HYPOTHESIS", "CHALLENGES_HYPOTHESIS"})
 
-    reasoning = str(parsed.get("reasoning", ""))[:500]
-    differentiator = str(parsed.get("differentiator", ""))[:300]
+    reasoning = str(parsed.get("reasoning", ""))[:REASONING_MAX_CHARS]
+    differentiator = str(parsed.get("differentiator", ""))[:DIFFERENTIATOR_MAX_CHARS]
 
     return {
         "relevance_score": rel,
