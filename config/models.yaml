@@ -17,7 +17,8 @@ classifier_model: "gemini/gemini-2.5-flash-lite"
 fetch_hours_back: 24
 first_run_hours_back: 48
 max_articles_per_source: 10
-max_articles_total: 250   # raised from 150: the 150 cap starved later bundles (geopolitics/Pakistan/cyber). Interim until per-bundle floors (§8.1/§8.6).
+max_articles_total: 250   # SUPERSEDED: order-based truncation removed (it starved later/newer sources). Kept for reference only; not read by the fetcher.
+fetch_safety_ceiling: 600  # No truncation under normal load. Only if a run exceeds this (typical peak ~200 articles x 3) do we cut — and then RANDOMLY across all articles, never by source order. Runaway-bug guard.
 
 # Priority
 priority_source_types: ["vc_blog", "research", "blog"]
