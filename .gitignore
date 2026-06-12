@@ -5,8 +5,9 @@
 # keep the template (placeholders only) trackable
 !.env.example
 
-# Local agent/Codex context and settings
+# Local agent/Codex context and settings — local-only, never committed
 CLAUDE.md
+AGENTS.md
 .codex/
 
 # Keys / certs — never commit
