@@ -31,6 +31,7 @@ from drop_reports import (  # noqa: E402
     make_slug, is_woven, render_investigations_section, splice_investigations,
 )
 from bundle_floors import select_themes_with_floors  # noqa: E402
+from char_monitor import overrun_flag  # noqa: E402  (NF-F2: over-cap quality flag)
 
 load_dotenv()
 
@@ -732,6 +733,11 @@ def run_writer():
     print(briefing_text)
     print(f"{'-' * 60}\n")
     print(f"Briefing chars: {len(briefing_text)} (limit: {max_chars}) | model: {used_model}")
+    # NF-F2: flag (don't fail) an over-cap brief so editorial drift is visible in the run log.
+    _overrun = overrun_flag(len(briefing_text), max_chars,
+                            config.get("writer_char_overrun_warn_ratio", 1.0))
+    if _overrun:
+        print(_overrun)
     print(f"Tokens: in={t_in} out={t_out} | Cost: ${cost:.4f} | Time: {duration_ms}ms")
 
     # Store. Record which article IDs went into the brief (clusters + highlights) so the

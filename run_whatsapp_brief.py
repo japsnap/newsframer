@@ -27,6 +27,7 @@ from agents.writer import (  # noqa: E402  (reuse, do not modify writer.py)
     pick_highlights, build_user_prompt, load_prompt_files, JST,
 )
 from agents.deliver import record_delivered, send_alert  # noqa: E402  (§4.3 confirmed-send recording)
+from agents.char_monitor import overrun_flag  # noqa: E402  (NF-F2: over-cap quality flag)
 from litellm import completion  # noqa: E402
 from datetime import datetime  # noqa: E402
 
@@ -177,6 +178,11 @@ def generate_brief(config, sb, categories, topic_keywords):
     text = resp.choices[0].message.content.strip()
     if quiet:
         text = "_Quiet news day — fewer items than usual._\n\n" + text
+    # NF-F2: flag (don't fail) an over-cap brief so editorial drift is visible in the run log.
+    print(f"  brief chars: {len(text)} (cap {max_chars})")
+    _overrun = overrun_flag(len(text), max_chars, config.get("writer_char_overrun_warn_ratio", 1.0))
+    if _overrun:
+        print(f"  {_overrun}")
     return text, used, selected_ids
 
 

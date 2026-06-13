@@ -58,6 +58,7 @@ writer_max_chars: 8500                  # superseded by per-theme scaling below 
 writer_per_theme_chars: 2500            # Fix 2: char budget per theme
 writer_max_chars_floor: 6000            # Fix 2: cap never below this
 writer_max_chars_ceiling: 16000         # Fix 2: cap never above this
+writer_char_overrun_warn_ratio: 1.0     # NF-F2: flag a brief in the run log when chars > cap x this (1.0 = any overrun; 1.15 = only >15% over)
 writer_highlights_count: 8         # target number of highlights
 writer_highlights_min_relevance: 8 # only rel >= 8 articles become highlights
 
