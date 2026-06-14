@@ -1,6 +1,10 @@
 """
-OpenClaw Dispatcher Agent
--------------------------
+OpenClaw Dispatcher Agent — DEPRECATED
+--------------------------------------
+DEPRECATED: superseded by agents/deliver.py + deliver_brief.py (the OpenClaw
+confirmed-send path, spec §4.3). The daily crons never run this file; it is kept
+for reference only. Do not use it for new work.
+
 Reads the most recent un-dispatched briefing and sends it to Telegram.
 Splits at ## section boundaries when content exceeds Telegram's per-message limit.
 Marks briefing as dispatched after successful delivery.
@@ -95,7 +99,7 @@ def escape_markdown_v2(text):
     return text
 
 
-def send_telegram_message(bot_token, chat_id, text, parse_mode="Markdown"):
+def send_telegram_message(bot_token, chat_id, text, parse_mode="Markdown", timeout=15):
     """Send one message via Telegram Bot API. Returns the message_id on success."""
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {
@@ -104,13 +108,13 @@ def send_telegram_message(bot_token, chat_id, text, parse_mode="Markdown"):
         "parse_mode": parse_mode,
         "disable_web_page_preview": True,
     }
-    r = requests.post(url, json=payload, timeout=15)
+    r = requests.post(url, json=payload, timeout=timeout)
     if r.status_code != 200:
         # Try without parse_mode if markdown parsing failed
         if "can't parse" in r.text.lower() or "bad request" in r.text.lower():
             print(f"  WARN: Markdown parse failed, retrying as plain text. Error: {r.text[:200]}")
             payload.pop("parse_mode", None)
-            r = requests.post(url, json=payload, timeout=15)
+            r = requests.post(url, json=payload, timeout=timeout)
         if r.status_code != 200:
             raise RuntimeError(f"Telegram API error {r.status_code}: {r.text}")
     data = r.json()
@@ -132,6 +136,8 @@ def run_dispatcher(force_latest=False):
 
     msg_limit = int(config.get("dispatcher_telegram_msg_limit", 3800))
     language = config.get("dispatcher_target_language", "en")
+    http_timeout = float(config.get("dispatcher_http_timeout_seconds", 15))
+    pause_seconds = float(config.get("dispatcher_inter_message_pause_seconds", 0.5))
 
     print("OpenClaw Dispatcher starting...")
     print(f"  Chat ID:    {chat_id}")
@@ -165,7 +171,7 @@ def run_dispatcher(force_latest=False):
     for i, chunk in enumerate(chunks, 1):
         print(f"\nSending chunk {i}/{len(chunks)}...")
         try:
-            msg_id = send_telegram_message(bot_token, chat_id, chunk, parse_mode="Markdown")
+            msg_id = send_telegram_message(bot_token, chat_id, chunk, parse_mode="Markdown", timeout=http_timeout)
             message_ids.append(msg_id)
             print(f"  Sent. message_id={msg_id}")
         except Exception as e:
@@ -182,7 +188,7 @@ def run_dispatcher(force_latest=False):
             sys.exit(1)
         # Small pause between sends to avoid rate-limits
         if i < len(chunks):
-            time.sleep(0.5)
+            time.sleep(pause_seconds)
 
     # Mark briefing as dispatched
     sb.table("briefings").update({
