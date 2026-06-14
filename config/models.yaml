@@ -72,15 +72,17 @@ drop_report_model: "gemini/gemini-2.5-flash-lite"  # cheap model for the short+l
 # high-volume bundle (crypto) can't crowd out a low-frequency one (cybersecurity). A bundle with
 # nothing qualifying is simply absent (no stale padding, §4.5). NOTE: writer_max_themes above now
 # governs the WhatsApp briefs only; the Telegram theme count is the dynamic target below.
-bundle_theme_floors:               # guaranteed minimum themes per active bundle
-  crypto: 1
+bundle_theme_floors:               # guaranteed minimum themes per active bundle (a bundle with no
+  crypto: 1                        #   qualifying in-window article is simply absent — never padded)
   geopolitics: 1
   pakistan: 1
   cybersecurity: 1
   tech: 1
+  vc: 1                            # NF-A1: VC split out of tech into its own bundle (own theme floor)
 bundle_theme_cap: 2                # max themes any single bundle may take (covers 2 big stories, never monopolizes)
-theme_count_multiplier: 1.5        # total Telegram themes = ceil(multiplier * number of active bundles); 5 bundles -> 8
-theme_count_max: 10                # absolute safety ceiling on total themes
+theme_count_multiplier: 1.5        # total Telegram themes = ceil(multiplier * #active bundles); 6 bundles -> 9
+theme_count_max: 14                # absolute safety ceiling on total themes (headroom as bundles grow: vc now,
+                                   #   football/etc. later — the multiplier above does the scaling; this only caps runaway)
 
 # ============================================================================
 # Tunables — NOTHING below is hard-coded in code; every value here is read with
@@ -123,6 +125,9 @@ deduplicator_price_event_text_chars: 300
 
 # --- Delivery ---
 telegram_message_limit: 3800       # per-message char cap (Telegram hard cap is 4096)
+deliver_wait_seconds: 240          # no-delivery fix (2026-06-14): deliver_brief waits up to this long
+deliver_poll_seconds: 15           #   for today's fresh brief before giving up (covers a build that
+                                   #   finishes just after deliver starts). 0 = old no-wait behaviour.
 
 # --- Run-health watchdog: slot start hours (JST; keep in step with the cron schedules) ---
 slot_hours:
