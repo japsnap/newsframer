@@ -95,6 +95,11 @@ def critique(brief_text, max_chars=None, config=None):
     return findings
 
 
+def theme_count(text):
+    """Number of '## ' theme sections (excludes Highlights / Investigations)."""
+    return sum(1 for (t, _b) in _sections(text) if _is_theme(t))
+
+
 def worst_severity(findings):
     """Highest severity present, or None when there are no findings."""
     if not findings:

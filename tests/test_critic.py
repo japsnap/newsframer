@@ -104,6 +104,11 @@ def test_format_report_groups_by_severity():
     ok("report_critical_header", "Critical" in c.format_report(f))
 
 
+def test_theme_count_excludes_highlights_and_investigations():
+    ok("theme_count_three", c.theme_count(GOOD) == 3)
+    ok("theme_count_empty", c.theme_count("") == 0)
+
+
 def main():
     failed = 0
     for name, fn in sorted(globals().items()):
