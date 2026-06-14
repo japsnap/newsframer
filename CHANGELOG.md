@@ -13,3 +13,10 @@ The dated, git-tracked record of what ships. Newest first. Written at `/logout`.
 - **AGENTS.md** is now gitignored/local (privacy convention: only `CHANGELOG.md` + `README.md` are tracked; `CLAUDE.md`/`BACKLOG.md` were already local).
 - Ecosystem Blueprint reference clarified as living in Obsidian; VISION pointer added.
 - This `CHANGELOG.md` is new — the start of the tracked ship log.
+
+## 2026-06-11 (pipeline hardening — backfilled 2026-06-14)
+- **Drop-reports (§8.5)** — investigative-category articles are pulled from the normal pool and handled on a wider 7-day deduped window, rendered as a distinct `## 🔍 Investigations` section (woven into the main theme on topic match), with a short+long pair stored locally; `get_drop_report.py` returns the long form on a "more: <slug>" reply. Telegram-self path. Pure logic in `agents/drop_reports.py`, wired into `agents/writer.py`. (`2e8b566`, `b8fcc2f`)
+- **Run-health watchdog (§4.5)** — `check_run_health.py` + an OpenClaw watchdog cron (06:30 JST) alert the operator over the direct Telegram Bot API (independent of OpenClaw delivery) when a stage went partial/failed, no fresh brief was produced, or the run didn't fire. (`373a18b`)
+- **Per-bundle theme floors (§8.1/§8.6)** — after the unchanged clustering, theme slots are re-allocated so every active bundle (source `category`) with a qualifying article gets at least its floor of themes, no bundle exceeds its cap, and the total scales with the active-bundle count. Pure logic in `agents/bundle_floors.py`. (`d1bf14e`)
+- **Hardened §4.3 delivery recording** — a brief's article IDs are recorded delivered **only after every chunk/message returns a real messageId**; on any failure, record nothing and alert. Confirmed-send seam in `agents/deliver.py`, shared by the Telegram and WhatsApp flows. (`20b606d`)
+- Dates backfilled from git on 2026-06-14; all four shipped 2026-06-11.
