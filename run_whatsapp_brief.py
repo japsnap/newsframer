@@ -45,7 +45,13 @@ TMP = os.environ.get("TEMP", BASE)
 REGISTRY_PATH = os.path.join(BASE, "config", "whatsapp_deliveries.yaml")
 LANG_LABELS = {"ur": "Urdu (Urdu script)", "ar": "Arabic", "hi": "Hindi", "en": "English"}
 DEFAULT_TOPIC_KEYWORDS = {
-    "geopolitics": ["geopolit", "middle east", "international affairs", "foreign policy", "diplomacy"],
+    # NF-E5: broadened so genuinely geopolitical stories whose analyst topics use
+    # rights / authoritarianism / migration language are no longer dropped. The
+    # live registry (config/whatsapp_deliveries.yaml) may override this per deploy.
+    "geopolitics": ["geopolit", "middle east", "international affairs", "foreign policy", "diplomacy",
+                    "ceasefire", "sanction", "nato", "united nations", "security council",
+                    "authoritarian", "human rights", "human trafficking", "refugee", "asylum",
+                    "genocide", "war crime", "occupation", "coup", "press freedom"],
     "pakistan": ["pakistan", "kashmir", "balochistan"],
     "cybersecurity": ["cyber", "malware", "ransomware", "vulnerability", "exploit", "breach", "cve"],
 }
