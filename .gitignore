@@ -46,3 +46,9 @@ BACKLOG.md
 
 # Drop-report local store (spec §8.5) — runtime data, regenerated per brief
 data/drop_reports/
+
+# Local audit notes + leftover cloud/scratch files — local-only, never committed
+CODEX_AUDIT.md
+codex_findings_rc.md
+Dockerfile
+.claude/
