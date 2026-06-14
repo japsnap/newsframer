@@ -2,6 +2,9 @@
 
 The dated, git-tracked record of what ships. Newest first. Written at `/logout`.
 
+## 2026-06-14 (RC session)
+- **NF-B1 verified live** — the `## 🔍 Investigations` drop-report section renders in a *delivered* brief (today's `dd781149`, sent to Telegram with 47 articles recorded). Closes NF-B1.
+
 ## 2026-06-13 (NF-F2 — char-overrun monitor)
 - A brief that exceeds its theme-scaled character cap now **flags in the run log** (`⚠ CHAR OVERRUN: <n> chars > cap <c> (+Δ, +pct%)`) instead of passing silently — surfaces the ~15–17% editorial drift noted in spec §15. New pure helper `agents/char_monitor.py` with a config-gated tolerance (`writer_char_overrun_warn_ratio`, default `1.0` = flag any overrun; e.g. `1.15` = only flag >15% over — no hard-coding), wired into **both** brief generators: the Telegram writer (`agents/writer.py`) and the WhatsApp brief (`run_whatsapp_brief.py`, which previously logged no char count at all).
 - Deliberately a **quality** flag, not a run-health failure: it does **not** touch `agent_runs.status`, so the §4.5 watchdog still treats an over-cap-but-successful brief as success (no schema change, no daily false alarms).
