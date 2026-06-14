@@ -2,6 +2,9 @@
 
 The dated, git-tracked record of what ships. Newest first. Written at `/logout`.
 
+## 2026-06-15
+- **Fix (NF-NEW3): Investigations section no longer monopolised by one source.** That morning's 06:00 brief showed 3 Investigations items all from Middle East Eye (its high-volume live-blog). Added a per-source cap to the drop picker — `agents/drop_reports.pick_diverse` + `agents/writer.build_drops`, config `drop_report_max_per_source: 1` — so each Investigations slot comes from a different source (backfills only when too few distinct sources exist). `tests/test_drop_reports.py` +4 cases (32 checks); suite 17/17. The deeper root — Middle East Eye is bundled as `investigative` but is a news outlet — is teed up in `recategorize_mee.sql` (a live-DB move to `geopolitics`, to run at home).
+
 ## 2026-06-14 (RC session)
 - **NF-B1 verified live** — the `## 🔍 Investigations` drop-report section renders in a *delivered* brief (today's `dd781149`, sent to Telegram with 47 articles recorded). Closes NF-B1.
 - **No-hardcoding enforcement test** — new `tests/test_no_hardcoding.py` fails the suite if any LLM call passes a bare `temperature`/`max_tokens`/… literal instead of a `config.get(...)` value (the most common no-hardcoding regression); includes a negative self-test so the guard can't pass hollow. Current engine code is clean.

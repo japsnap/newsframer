@@ -25,6 +25,42 @@ def ok(name, cond):
 SLUG_RE = re.compile(r"^[a-z0-9-]+$")
 
 
+# --- pick_diverse (NF-NEW3: no single source monopolises Investigations) ---
+def _items(*srcs):
+    return [{"id": i, "src": s} for i, s in enumerate(srcs)]
+
+
+def _src(it):
+    return it["src"]
+
+
+def test_pick_diverse_caps_one_per_source():
+    ordered = _items("mee", "mee", "mee", "intercept", "technadu")  # best-first
+    got = dr.pick_diverse(ordered, 3, 1, _src)
+    ok("pd_three", len(got) == 3)
+    ok("pd_distinct_sources", len({_src(x) for x in got}) == 3)
+    ok("pd_keeps_top_item", got[0]["src"] == "mee")
+    ok("pd_order", [x["src"] for x in got] == ["mee", "intercept", "technadu"])
+
+
+def test_pick_diverse_backfills_when_too_few_sources():
+    # only one source -> can't diversify; backfill keeps the top items (old behaviour).
+    got = dr.pick_diverse(_items("mee", "mee", "mee", "mee"), 3, 1, _src)
+    ok("pd_backfill_len", len(got) == 3)
+    ok("pd_backfill_all_mee", all(x["src"] == "mee" for x in got))
+
+
+def test_pick_diverse_max_per_source_two():
+    got = dr.pick_diverse(_items("a", "a", "a", "b"), 3, 2, _src)
+    ok("pd_two_per", [x["src"] for x in got] == ["a", "a", "b"])
+
+
+def test_pick_diverse_empty_and_order():
+    ok("pd_empty", dr.pick_diverse([], 3, 1, _src) == [])
+    got = dr.pick_diverse(_items("a", "b", "c", "d"), 2, 1, _src)
+    ok("pd_top_two", [x["src"] for x in got] == ["a", "b"])
+
+
 # --- make_slug -------------------------------------------------------------
 def test_slug_basic():
     s = dr.make_slug("Pegasus traced to new operator")

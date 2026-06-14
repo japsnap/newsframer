@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from run_log import record_run  # noqa: E402
 from llm_json import parse_json_obj  # noqa: E402
 from drop_reports import (  # noqa: E402
-    make_slug, is_woven, render_investigations_section, splice_investigations,
+    make_slug, is_woven, render_investigations_section, splice_investigations, pick_diverse,
 )
 from bundle_floors import select_themes_with_floors  # noqa: E402
 from char_monitor import overrun_flag  # noqa: E402  (NF-F2: over-cap quality flag)
@@ -489,7 +489,7 @@ def generate_drop_summary(article, model, completion_fn=completion):
 
 
 def build_drops(drop_candidates, main_theme_topics, max_drops, model, sources_map,
-                completion_fn=completion):
+                completion_fn=completion, max_per_source=1):
     """Pick the top drops, weave-flag each against the main theme, and generate
     summaries. Returns dicts {article, render, store, woven}. Logs if more than
     max_drops qualify (no silent cap). On a summary failure, falls back to the
@@ -498,7 +498,7 @@ def build_drops(drop_candidates, main_theme_topics, max_drops, model, sources_ma
     if len(ordered) > max_drops:
         print(f"  DROP CAP: {len(ordered)} investigative articles qualified; keeping top {max_drops} "
               f"(others wait for a later brief).")
-    chosen = ordered[:max_drops]
+    chosen = pick_diverse(ordered, max_drops, max_per_source, lambda a: a.get("source_id"))
     slugs = set()
     out = []
     for a in chosen:
@@ -672,7 +672,9 @@ def run_writer():
     if clusters:
         for a in clusters[0]:
             main_theme_topics |= set(a["score"].get("topics") or [])
-    drops = build_drops(drop_candidates, main_theme_topics, drop_max, drop_model, sources_map) \
+    drop_max_per_source = int(config.get("drop_report_max_per_source", 1))
+    drops = build_drops(drop_candidates, main_theme_topics, drop_max, drop_model, sources_map,
+                        max_per_source=drop_max_per_source) \
         if drop_candidates else []
     if drops:
         woven_n = sum(1 for d in drops if d["woven"])

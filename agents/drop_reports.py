@@ -47,6 +47,30 @@ def is_woven(drop_topics, main_topics, min_shared=1):
     return len(d & m) >= min_shared
 
 
+def pick_diverse(ordered, max_drops, max_per_source, source_key):
+    """From a list already sorted best-first, choose up to max_drops items while
+    taking at most max_per_source from any single source — so one high-volume source
+    can't monopolise the Investigations section (the "3x same source" bug, e.g. three
+    Middle East Eye live-blog items). If too few distinct sources exist to fill
+    max_drops, backfill with the best remaining items (still best-first).
+    source_key(item) returns the item's source identity (e.g. its source_id)."""
+    chosen, over_cap, per = [], [], {}
+    for item in ordered or []:
+        src = source_key(item)
+        if per.get(src, 0) < max_per_source:
+            chosen.append(item)
+            per[src] = per.get(src, 0) + 1
+            if len(chosen) >= max_drops:
+                return chosen
+        else:
+            over_cap.append(item)
+    for item in over_cap:          # only when too few distinct sources to fill the cap
+        if len(chosen) >= max_drops:
+            break
+        chosen.append(item)
+    return chosen[:max_drops]
+
+
 def render_investigations_section(drops):
     """Deterministic Markdown for the Investigations section. Built in Python (not
     by the LLM) so it can't be dropped/hallucinated and never leaks into the

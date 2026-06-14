@@ -65,6 +65,8 @@ writer_highlights_min_relevance: 8 # only rel >= 8 articles become highlights
 # Drop-reports (spec §8.5, basic version — Telegram-self only)
 drop_report_window_hours: 168      # 7-day deduped window for investigative drops (explicit exception to the §4.5 24h selection rule)
 drop_report_max: 3                 # max drops per brief; logs overflow (no silent cap)
+drop_report_max_per_source: 1      # NF-NEW3: max drops from any ONE source per brief, so a high-volume
+                                   #   investigative source can't take every Investigations slot
 drop_report_model: "gemini/gemini-2.5-flash-lite"  # cheap model for the short+long drop summaries
 
 # Per-bundle theme floors (spec §8.1/§8.6) — Telegram brief only. Guarantees each ACTIVE bundle
