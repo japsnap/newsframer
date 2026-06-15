@@ -97,15 +97,45 @@ def test_parse_standings():
 
 
 def test_build_payload_windows():
-    now = datetime(2026, 6, 15, 10, 50, tzinfo=JST)
+    # now = 2026-06-15 12:00 JST = 03:00 UTC. Rolling-24h by REAL kickoff (not venue date):
+    #   Arg-Bra  kicked off 06-15 00:00 UTC (3h ago)   -> result.
+    #   Spain-Ger kicks off 06-16 02:00 UTC (23h ahead) -> fixture.
+    now = datetime(2026, 6, 15, 12, 0, tzinfo=JST)
     pay = wd.build_payload(HTML, now)
-    ok("results_one", len(pay["results"]) == 1)         # Arg-Bra played yesterday
-    ok("fixtures_one", len(pay["fixtures"]) == 1)        # Spain-Germany today
+    ok("results_one", len(pay["results"]) == 1)         # Arg-Bra, kicked off within last 24h
+    ok("fixtures_one", len(pay["fixtures"]) == 1)        # Spain-Germany, kicks off within next 24h
     ok("standings_two", len(pay["standings"]) == 2)
     ok("result_goals_intact", len(pay["results"][0]["goals"]) == 3)
     ok("fixture_kickoff", "9:00" in pay["fixtures"][0]["kickoff"])
     ok("fixture_kickoff_utc", "UTC-5" in pay["fixtures"][0]["kickoff"])   # offset survives for tz conversion
     ok("fixture_date", pay["fixtures"][0]["date"] == "2026-06-15")   # date carried for tz conversion
+
+
+def test_rolling_window_beats_venue_date():
+    # THE BUG: a match with venue date 06-14 but whose REAL kickoff was 06-15 06:00 UTC.
+    # now = 06-16 06:00 JST (06-15 21:00 UTC) -> kicked off only 15h ago. The old calendar
+    # filter (today 06-16 minus venue 06-14 = 2 days) WRONGLY dropped it; rolling-24h keeps it.
+    html = (
+        '<div class="footballbox"><div class="fleft"><time>'
+        '<div class="fdate">June 14, 2026<span style="display:none"> '
+        '(<span class="bday">2026-06-14</span>)</span></div>'
+        '<div class="ftime">11:00 p.m. <a href="/wiki/UTC">UTC-7</a></div></time></div>'
+        '<table class="fevent"><tbody><tr itemprop="name">'
+        '<th class="fhome" itemprop="homeTeam"><span itemprop="name"><a href="/wiki/Sweden">Sweden</a></span></th>'
+        '<th class="fscore"><a href="/wiki/2026_FIFA_World_Cup_Group_F">5–1</a></th>'
+        '<th class="faway" itemprop="awayTeam"><span itemprop="name"><a href="/wiki/Tunisia">Tunisia</a></span></th>'
+        '</tr></tbody></table></div>'
+    )
+    now = datetime(2026, 6, 16, 6, 0, tzinfo=JST)
+    pay = wd.build_payload(html, now)
+    ok("venue_date_lag_kept", len(pay["results"]) == 1)
+    ok("venue_date_lag_team", pay["results"][0]["home"]["name"] == "Sweden")
+    # And a match that kicked off >24h ago is NOT a result, even if its venue date is "today".
+    old = html.replace("2026-06-14", "2026-06-16").replace("11:00 p.m. <a href=\"/wiki/UTC\">UTC-7",
+                                                            "1:00 a.m. <a href=\"/wiki/UTC\">UTC+0")
+    # 06-16 01:00 UTC kickoff vs now 06-15 21:00 UTC -> in the FUTURE by 4h -> a fixture, not a result.
+    pay2 = wd.build_payload(old, now)
+    ok("future_not_result", len(pay2["results"]) == 0)
 
 
 def test_empty_html_safe():

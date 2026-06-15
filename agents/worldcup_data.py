@@ -20,7 +20,7 @@ one item rather than raising (a once-daily pull after matches settle is reliable
     venv\\Scripts\\python.exe tests\\test_worldcup_data.py
 """
 import re
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 WIKI_URL = "https://en.wikipedia.org/wiki/2026_FIFA_World_Cup"
 _UA = {"User-Agent": "NewsFramer/1.0 (worldcup parser; personal use)"}
@@ -162,11 +162,42 @@ def parse_standings(html):
     return out
 
 
-def build_payload(html, now, result_window_days=1, fixture_window_days=1):
-    """Filter parsed data to last-Nd results + next-Nd fixtures + all standings, in
-    the exact shape agents/worldcup_format expects. `now` is a tz-aware datetime
-    (use JST so the day window matches the brief)."""
+def _kickoff_utc(date_str, time_str):
+    """Real UTC kickoff from the Wikipedia date + venue time ('8:00 p.m. UTC-4'). Returns
+    an aware UTC datetime, or None if either piece can't be parsed (caller then falls back
+    to a calendar-day window). This is what makes the result/fixture windows a TRUE rolling
+    24h instead of a venue-date cut — the 2026 venues sit in the US (UTC-4..-7), so a venue
+    'date' can be a day behind real time."""
+    if not date_str or not time_str:
+        return None
+    tm = re.search(r"(\d{1,2}):(\d{2})\s*(a\.?m\.?|p\.?m\.?)?", time_str, re.I)
+    om = re.search(r"UTC\s*([+-]?\d{1,2})", time_str, re.I)
+    if not tm or not om:
+        return None
+    h, mn = int(tm.group(1)), int(tm.group(2))
+    ap = (tm.group(3) or "").lower().replace(".", "")
+    if ap == "pm" and h != 12:
+        h += 12
+    elif ap == "am" and h == 12:
+        h = 0
+    if not (0 <= h <= 23 and 0 <= mn <= 59):
+        return None
+    try:
+        venue = datetime.strptime(date_str, "%Y-%m-%d").replace(hour=h, minute=mn, tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return venue - timedelta(hours=int(om.group(1)))   # venue-local -> UTC
+
+
+def build_payload(html, now, result_window_hours=24, fixture_window_hours=24):
+    """results = FINISHED matches that kicked off within the last `result_window_hours`;
+    fixtures = upcoming matches kicking off within the next `fixture_window_hours` — a TRUE
+    rolling window from `now` (tz-aware, pass JST), NOT a calendar-day cut. A match whose
+    kickoff time can't be parsed falls back to a date-based window so it's never lost."""
+    now_utc = now.astimezone(timezone.utc)
     today = now.date()
+    rd = max(1, round(result_window_hours / 24))
+    fd = max(1, round(fixture_window_hours / 24))
     results, fixtures = [], []
     for m in parse_matches(html):
         if not m.get("date"):
@@ -174,14 +205,19 @@ def build_payload(html, now, result_window_days=1, fixture_window_days=1):
         try:
             d = datetime.strptime(m["date"], "%Y-%m-%d").date()
         except ValueError:
-            continue
+            d = None
+        ku = _kickoff_utc(m.get("date"), m.get("time"))
         if m["played"] and m["home_score"] is not None:
-            if 0 <= (today - d).days <= result_window_days:
+            keep = (0 <= (now_utc - ku).total_seconds() <= result_window_hours * 3600) if ku is not None \
+                else (d is not None and 0 <= (today - d).days <= rd)
+            if keep:
                 results.append({"home": m["home"], "away": m["away"],
                                 "home_score": m["home_score"], "away_score": m["away_score"],
                                 "goals": m["goals"]})
         elif not m["played"]:
-            if 0 <= (d - today).days <= fixture_window_days:
+            keep = (0 <= (ku - now_utc).total_seconds() <= fixture_window_hours * 3600) if ku is not None \
+                else (d is not None and 0 <= (d - today).days <= fd)
+            if keep:
                 fixtures.append({"home": m["home"], "away": m["away"],
                                  "kickoff": m.get("time", ""), "date": m["date"]})
     return {"results": results, "standings": parse_standings(html), "fixtures": fixtures}

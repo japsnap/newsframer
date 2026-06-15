@@ -149,8 +149,10 @@ deduplicator_price_event_text_chars: 300
 
 # --- World Cup (NF-A3, temporary — data from Wikipedia, not an API) ---
 worldcup_end_date: "2026-07-19"        # after this the WC message self-skips (no empty sends)
-worldcup_result_window_days: 1         # results = matches played within the last N days
-worldcup_fixture_window_days: 1        # fixtures = matches within the next N days
+worldcup_result_window_hours: 24       # results = FINISHED matches that kicked off in the last N hours —
+                                       #   a TRUE rolling window by real kickoff time, NOT a venue-date cut
+                                       #   (WC venues are in the US/behind UTC, so a venue date lags real time)
+worldcup_fixture_window_hours: 24      # fixtures = matches kicking off within the next N hours (rolling)
 worldcup_display_tz: "Asia/Karachi"    # label for the "Next 24 hours" kickoff times (Pakistan time)
 worldcup_display_utc_offset_hours: 5   # offset used to CONVERT kickoffs (this Windows host has no IANA
                                        #   tzdata, so zoneinfo can't resolve the name; Pakistan has no

@@ -80,8 +80,8 @@ def build(html, now, cfg=None):
     """(payload, formatted message). Pure given html+now+cfg — unit-testable. Reads the
     display-tz offset/label and the reply line from config (defaults reproduce current)."""
     cfg = cfg or {}
-    rw = int(cfg.get("worldcup_result_window_days", 1))
-    fw = int(cfg.get("worldcup_fixture_window_days", 1))
+    rw = int(cfg.get("worldcup_result_window_hours", 24))
+    fw = int(cfg.get("worldcup_fixture_window_hours", 24))
     off = cfg.get("worldcup_display_utc_offset_hours", 5)
     off = int(off) if off is not None else None
     label = cfg.get("worldcup_display_tz_label", "PKT / UTC+5")
