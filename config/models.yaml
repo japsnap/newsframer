@@ -16,9 +16,17 @@ classifier_model: "gemini/gemini-2.5-flash-lite"
 # Fetcherの設定
 fetch_hours_back: 24
 first_run_hours_back: 48
-max_articles_per_source: 10
+max_articles_per_source: 100   # 2026-06-15 (operator): raised 10 -> 100. The fetch is "newest-first"
+                               #   (top of each RSS feed, within fetch_hours_back); a small cap + one
+                               #   daily poll dropped earlier-in-the-day stories from busy sources.
+                               #   100 effectively takes the full 24h each feed exposes. This is the
+                               #   GLOBAL/basic setting; a future "light mode" (cap ~10, most-recent
+                               #   only) is backlogged as a switchable profile.
 max_articles_total: 250   # SUPERSEDED: order-based truncation removed (it starved later/newer sources). Kept for reference only; not read by the fetcher.
-fetch_safety_ceiling: 600  # No truncation under normal load. Only if a run exceeds this (typical peak ~200 articles x 3) do we cut — and then RANDOMLY across all articles, never by source order. Runaway-bug guard.
+fetch_safety_ceiling: 3000  # 2026-06-15: raised 600 -> 3000 to match the 100/source cap (43 producing
+                            #   sources x up to 100). Pure runaway guard: only if a run exceeds this do we
+                            #   cut, and then RANDOMLY across all articles (never by source order). 3000
+                            #   caps a tens-of-thousands runaway without throwing away normal-load context.
 
 # Priority
 priority_source_types: ["vc_blog", "research", "blog"]
