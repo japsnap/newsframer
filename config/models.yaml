@@ -125,6 +125,20 @@ drop_report_long_max_chars: 2000
 deduplicator_embed_text_chars: 500
 deduplicator_price_event_text_chars: 300
 
+# --- World Cup (NF-A3, temporary — data from Wikipedia, not an API) ---
+worldcup_end_date: "2026-07-19"        # after this the WC message self-skips (no empty sends)
+worldcup_result_window_days: 1         # results = matches played within the last N days
+worldcup_fixture_window_days: 1        # fixtures = matches within the next N days
+worldcup_display_tz: "Asia/Karachi"    # label for the "Next 24 hours" kickoff times (Pakistan time)
+worldcup_display_utc_offset_hours: 5   # offset used to CONVERT kickoffs (this Windows host has no IANA
+                                       #   tzdata, so zoneinfo can't resolve the name; Pakistan has no
+                                       #   DST, so a fixed +5 is exact). Change both if the audience moves.
+worldcup_display_tz_label: "PKT / UTC+5"  # shown once in the fixtures header so readers know the zone
+worldcup_reply_line: "Any questions, reply"  # closing invite; "" disables it. Reply HANDLING is NOT built
+                                       #   yet — replies are only received (no auto-response). See run_worldcup_brief.
+# Which WhatsApp registry chats receive the WC brief: every delivery EXCEPT those with `worldcup: false`
+# in config/whatsapp_deliveries.yaml (gitignored). Targets/JIDs/numbers stay in that registry, never here.
+
 # --- Delivery ---
 telegram_message_limit: 3800       # per-message char cap (Telegram hard cap is 4096)
 deliver_wait_seconds: 240          # no-delivery fix (2026-06-14): deliver_brief waits up to this long

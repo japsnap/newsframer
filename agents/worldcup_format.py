@@ -12,10 +12,16 @@ Data shapes the fetch layer must produce:
               "goals": [{"team": "home"|"away", "scorer": str, "minute": int|str}]}
   standing = {"group": str, "team": str, "iso2": str, "played": int, "won": int,
               "drawn": int, "lost": int, "gd": int, "points": int}
-  fixture  = {"home": Team, "away": Team, "kickoff": str}   # kickoff pre-formatted (JST)
+  fixture  = {"home": Team, "away": Team, "kickoff": str, "date": "YYYY-MM-DD"}
+             # kickoff = Wikipedia venue time ("8:00 p.m. UTC-4"); `date` lets us
+             # convert it into the operator's display tz (UTC+offset) at render time.
 
     venv\\Scripts\\python.exe tests\\test_worldcup_format.py
 """
+import re
+from datetime import datetime, timedelta
+
+_WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 # Country name -> ISO-3166 alpha-2, used only when the data gives a name but no code.
 # flag_from_iso2 below covers ANY valid code; extend this map as the draw confirms.
@@ -30,6 +36,10 @@ COUNTRY_ISO2 = {
     "poland": "PL", "serbia": "RS", "pakistan": "PK", "norway": "NO", "sweden": "SE",
     "austria": "AT", "turkey": "TR", "ukraine": "UA", "peru": "PE", "chile": "CL",
     "paraguay": "PY", "new zealand": "NZ", "south africa": "ZA", "algeria": "DZ", "tunisia": "TN",
+    # NF-A3: remaining 2026 World Cup nations so every match/standing renders a flag.
+    "czech republic": "CZ", "bosnia and herzegovina": "BA", "haiti": "HT", "curaçao": "CW",
+    "curacao": "CW", "cape verde": "CV", "iraq": "IQ", "jordan": "JO", "dr congo": "CD",
+    "uzbekistan": "UZ", "panama": "PA", "scotland": "GB", "wales": "GB",
 }
 
 
@@ -113,26 +123,70 @@ def format_standings(standings):
     return "\n\n".join(blocks)
 
 
-def format_fixtures(fixtures):
-    """Part 3 — next-24h fixtures."""
+def kickoff_in_tz(date_str, venue_time, offset_hours):
+    """Convert a Wikipedia venue kickoff (e.g. '8:00 p.m. UTC-4' on date_str
+    'YYYY-MM-DD') into the operator's display tz (UTC+offset_hours). Returns a short
+    'Wed 7:00 AM' string, or '' if the input can't be parsed (caller falls back to the
+    raw venue string — never crashes). Pure arithmetic: no tz database needed (the host
+    has no IANA tzdata; the offset is supplied from config, e.g. Asia/Karachi = +5)."""
+    if not date_str or not venue_time or offset_hours is None:
+        return ""
+    tm = re.search(r"(\d{1,2}):(\d{2})\s*(a\.?m\.?|p\.?m\.?)?", venue_time, re.I)
+    om = re.search(r"UTC\s*([+-]?\d{1,2})", venue_time, re.I)
+    if not tm or not om:
+        return ""
+    h, mnt = int(tm.group(1)), int(tm.group(2))
+    ap = (tm.group(3) or "").lower().replace(".", "")
+    if ap == "pm" and h != 12:
+        h += 12
+    elif ap == "am" and h == 12:
+        h = 0
+    if not (0 <= h <= 23 and 0 <= mnt <= 59):
+        return ""
+    try:
+        base = datetime.strptime(date_str, "%Y-%m-%d").replace(hour=h, minute=mnt)
+    except (ValueError, TypeError):
+        return ""
+    disp = base - timedelta(hours=int(om.group(1))) + timedelta(hours=int(offset_hours))
+    hr12 = disp.hour % 12 or 12
+    return f"{_WEEKDAYS[disp.weekday()]} {hr12}:{disp.minute:02d} {'AM' if disp.hour < 12 else 'PM'}"
+
+
+def format_fixtures(fixtures, tz_offset_hours=None, tz_label=""):
+    """Part: next-24h fixtures. When tz_offset_hours is given, each kickoff is shown in
+    the display tz (UTC+offset); otherwise the raw venue string is shown. The display-tz
+    label (e.g. 'PKT / UTC+5') goes once in the header, not on every line."""
     if not fixtures:
         return "*Next 24 hours*\n_No matches scheduled._"
-    out = ["*Next 24 hours*"]
+    header = "*Next 24 hours*"
+    if tz_label:
+        header += f" _(kickoff in {tz_label})_"
+    out = [header]
     for fx in fixtures:
         h, a = fx.get("home", {}), fx.get("away", {})
-        ko = fx.get("kickoff", "")
+        ko = ""
+        if tz_offset_hours is not None:
+            ko = kickoff_in_tz(fx.get("date"), fx.get("kickoff", ""), tz_offset_hours)
+        ko = ko or fx.get("kickoff", "")          # fall back to the raw venue time
         line = " ".join(p for p in (flag(h), _name(h), "vs", _name(a), flag(a)) if p)
         out.append(f"{line} — {ko}" if ko else line)
     return "\n".join(out)
 
 
-def format_worldcup_message(results, standings, fixtures, wrap_up=None):
-    """Assemble the full 3-part World Cup WhatsApp message. wrap_up is the optional
-    written summary (added later, generated FROM the same structured data — never news)."""
+def format_worldcup_message(results, standings, fixtures, wrap_up=None,
+                            tz_offset_hours=None, tz_label="", reply_line=""):
+    """Assemble the full World Cup WhatsApp message. Section order: results ->
+    next-24h fixtures -> group standings. wrap_up is the optional written summary
+    (generated FROM the same structured data — never news). reply_line is an optional
+    closing invite (e.g. 'Any questions, reply'); kept config-driven so the text/toggle
+    lives in config, not code."""
     parts = ["🏆 *World Cup 2026 — Daily Update*",
              format_results(results),
-             format_standings(standings),
-             format_fixtures(fixtures)]
+             format_fixtures(fixtures, tz_offset_hours, tz_label),
+             format_standings(standings)]
     if wrap_up:
         parts.append("*Wrap-up*\n" + wrap_up.strip())
-    return "\n\n".join(p for p in parts if p)
+    msg = "\n\n".join(p for p in parts if p)
+    if reply_line and reply_line.strip():
+        msg += "\n\n" + reply_line.strip()
+    return msg

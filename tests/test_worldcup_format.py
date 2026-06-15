@@ -90,6 +90,33 @@ def test_format_fixtures():
     ok("fixtures_empty", "No matches scheduled" in wc.format_fixtures([]))
 
 
+def test_kickoff_in_tz():
+    # 9:00 p.m. UTC-5  -> 02:00 UTC next day -> +5 (Karachi) -> 07:00 the day after.
+    ok("ktz_convert", "7:00 AM" in wc.kickoff_in_tz("2026-06-15", "9:00 p.m. UTC-5", 5))
+    # 8:00 p.m. UTC-4  -> 00:00 UTC next day -> +5 -> 05:00.
+    ok("ktz_pm", wc.kickoff_in_tz("2026-06-15", "8:00 p.m. UTC-4", 5).endswith("5:00 AM"))
+    ok("ktz_noon", "5:00 PM" in wc.kickoff_in_tz("2026-06-15", "12:00 p.m. UTC+0", 5))
+    ok("ktz_midnight", "5:00 AM" in wc.kickoff_in_tz("2026-06-15", "12:00 a.m. UTC+0", 5))
+    ok("ktz_weekday", wc.kickoff_in_tz("2026-06-15", "9:00 p.m. UTC-5", 5)[:3] in
+       ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"))
+    # Unparseable -> '' so the caller falls back to the raw venue string (never crashes).
+    ok("ktz_no_offset", wc.kickoff_in_tz("2026-06-15", "3:00 p.m. local", 5) == "")
+    ok("ktz_no_date", wc.kickoff_in_tz("", "8:00 p.m. UTC-4", 5) == "")
+    ok("ktz_none_off", wc.kickoff_in_tz("2026-06-15", "8:00 p.m. UTC-4", None) == "")
+
+
+def test_format_fixtures_tz_and_fallback():
+    fx = [{"home": {"name": "Spain", "iso2": "ES"}, "away": {"name": "Germany", "iso2": "DE"},
+           "kickoff": "9:00 p.m. UTC-5", "date": "2026-06-15"}]
+    s = wc.format_fixtures(fx, tz_offset_hours=5, tz_label="PKT / UTC+5")
+    ok("fx_tz_label", "PKT / UTC+5" in s)
+    ok("fx_tz_time", "7:00 AM" in s)            # converted to UTC+5
+    ok("fx_tz_no_raw", "UTC-5" not in s)        # raw venue string is gone
+    # No tz given -> raw venue string is shown unchanged.
+    s2 = wc.format_fixtures(fx)
+    ok("fx_raw_fallback", "9:00 p.m. UTC-5" in s2)
+
+
 def test_full_message_assembly():
     msg = wc.format_worldcup_message(
         results=[{"home": {"name": "Argentina", "iso2": "AR"},
@@ -107,6 +134,30 @@ def test_full_message_assembly():
     ok("msg_standings", "*Group A*" in msg)
     ok("msg_fixtures", "Next 24 hours" in msg)
     ok("msg_wrapup", "Wrap-up" in msg and "edged Brazil" in msg)
+
+
+def test_section_order_and_reply():
+    msg = wc.format_worldcup_message(
+        results=[{"home": {"name": "Argentina", "iso2": "AR"},
+                  "away": {"name": "Brazil", "iso2": "BR"},
+                  "home_score": 1, "away_score": 0, "goals": []}],
+        standings=[{"group": "A", "team": "Argentina", "played": 1, "won": 1,
+                    "drawn": 0, "lost": 0, "gd": 1, "points": 3}],
+        fixtures=[{"home": {"name": "Spain", "iso2": "ES"},
+                   "away": {"name": "Germany", "iso2": "DE"},
+                   "kickoff": "9:00 p.m. UTC-5", "date": "2026-06-15"}],
+        tz_offset_hours=5, tz_label="PKT / UTC+5", reply_line="Any questions, reply",
+    )
+    i_res = msg.index("Yesterday's results")
+    i_fix = msg.index("Next 24 hours")
+    i_std = msg.index("*Group A*")
+    ok("order_results_before_fixtures", i_res < i_fix)
+    ok("order_fixtures_before_standings", i_fix < i_std)   # NEW order: results -> fixtures -> standings
+    ok("reply_line_at_end", msg.rstrip().endswith("Any questions, reply"))
+    ok("tz_time_in_msg", "7:00 AM" in msg)
+    # reply_line="" must NOT append anything
+    msg2 = wc.format_worldcup_message([], [], [], reply_line="")
+    ok("no_reply_when_blank", "Any questions" not in msg2)
 
 
 def main():
