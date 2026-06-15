@@ -26,6 +26,24 @@ AGENTS = [
 ]
 
 
+def _cfg_flag(key, default=False):
+    try:
+        import yaml
+        with open(BASE_DIR / "config" / "models.yaml", encoding="utf-8") as f:
+            return bool((yaml.safe_load(f) or {}).get(key, default))
+    except Exception:
+        return default
+
+
+# NF-NEW10: collapse same-story wire copies BEFORE the analyst — only when enabled in
+# config (default off => pipeline byte-for-byte unchanged). Runs after the deduplicator
+# (which sets the cluster_id it reuses) and before the analyst (which then skips the
+# soft-deleted copies).
+if _cfg_flag("title_dedup_enabled"):
+    _ai = next(i for i, (n, _) in enumerate(AGENTS) if n == "analyst")
+    AGENTS.insert(_ai, ("title_dedup", [PYTHON, str(BASE_DIR / "agents" / "title_dedup.py"), "--apply"]))
+
+
 def run_agent(name, cmd):
     print(f"\n[{datetime.utcnow().isoformat()}] Starting {name}...")
     start = time.time()

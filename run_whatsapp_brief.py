@@ -144,6 +144,13 @@ def gap_refresh():
         ("deduplicator", [py, os.path.join(base, "agents", "deduplicator.py"), "--apply"]),
         ("analyst",      [py, os.path.join(base, "agents", "analyst.py")]),
     ]
+    # NF-NEW10: collapse same-story wire copies before the analyst, only when enabled (default off).
+    try:
+        if load_config().get("title_dedup_enabled", False):
+            _ai = next(i for i, (n, _) in enumerate(stages) if n == "analyst")
+            stages.insert(_ai, ("title_dedup", [py, os.path.join(base, "agents", "title_dedup.py"), "--apply"]))
+    except Exception:
+        pass
     for name, cmd in stages:
         try:
             print(f"  [gap-refresh] {name} ...")
