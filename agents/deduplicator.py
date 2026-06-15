@@ -31,6 +31,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Windows cp1252 consoles crash printing non-Latin titles (global feeds) — make stdout
+# UTF-8 so logging a cluster member can never kill the run (2026-06-16 smoke-test incident).
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 
 def load_config():
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

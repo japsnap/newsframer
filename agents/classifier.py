@@ -11,6 +11,7 @@ Logs the run to agent_runs with tokens, cost, duration.
 """
 
 import os
+import sys
 import json
 import time
 import yaml
@@ -20,6 +21,13 @@ from supabase import create_client
 from dotenv import load_dotenv
 
 from llm_json import parse_json_list
+
+# Windows cp1252 consoles crash printing non-Latin titles (global feeds) — make stdout
+# UTF-8 so logging an article can never kill the run (2026-06-16 smoke-test incident).
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 from run_log import record_run
 
 load_dotenv()

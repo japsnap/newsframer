@@ -10,6 +10,7 @@ import feedparser
 import requests
 import yaml
 import os
+import sys
 import time
 import hashlib
 import random
@@ -21,6 +22,13 @@ from dotenv import load_dotenv
 from run_log import record_run
 
 load_dotenv()
+
+# Windows cp1252 consoles crash printing non-Latin titles (global feeds) — make stdout
+# UTF-8 so logging a source/article can never kill the run (2026-06-16 smoke-test incident).
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 # Sources that errored during this run (fetch_rss / fetch_web swallow per-source
 # errors so one bad feed can't sink the rest). Reset per run by run_fetcher;

@@ -15,6 +15,7 @@ Idempotent via UNIQUE(article_id).
 """
 
 import os
+import sys
 import json
 import time
 import yaml
@@ -23,6 +24,15 @@ from supabase import create_client
 from dotenv import load_dotenv
 
 from llm_json import parse_json_obj
+
+# Windows consoles default to cp1252 and raise UnicodeEncodeError when a print contains a
+# non-Latin character (Arabic/CJK/emoji titles are common now that global wires feed in).
+# A crash here would kill the run mid-scoring and leave the rest unscored — make stdout
+# UTF-8 so logging a title can never sink the analyst (2026-06-16 smoke-test incident).
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 from run_log import record_run
 
 load_dotenv()
