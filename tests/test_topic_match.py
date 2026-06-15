@@ -72,6 +72,33 @@ def test_any_category_matches():
     ok("any_of_two", wa.topic_match(a, ["geopolitics", "cybersecurity"], KW))
 
 
+# --- NF-C2 is_fresh: the second-slot freshness gate ------------------------
+from datetime import datetime, timezone, timedelta  # noqa: E402
+
+NOW = datetime(2026, 6, 15, 2, 0, tzinfo=timezone.utc)  # 11:00 JST
+
+
+def test_is_fresh_recent_true():
+    ok("fresh_2h", wa.is_fresh((NOW - timedelta(hours=2)).isoformat(), NOW, 6))
+    ok("fresh_zulu", wa.is_fresh("2026-06-15T00:30:00Z", NOW, 6))      # 1.5h ago
+
+
+def test_is_fresh_old_false():
+    ok("stale_8h", not wa.is_fresh((NOW - timedelta(hours=8)).isoformat(), NOW, 6))
+    ok("stale_boundary", not wa.is_fresh((NOW - timedelta(hours=6, minutes=1)).isoformat(), NOW, 6))
+
+
+def test_is_fresh_naive_timestamp_treated_utc():
+    ok("naive_ok", wa.is_fresh("2026-06-15T00:30:00", NOW, 6))          # no tz -> assume UTC, 1.5h ago
+
+
+def test_is_fresh_bad_input_not_fresh():
+    ok("blank", not wa.is_fresh("", NOW, 6))
+    ok("none", not wa.is_fresh(None, NOW, 6))
+    ok("garbage", not wa.is_fresh("not-a-date", NOW, 6))
+    ok("no_hours", not wa.is_fresh((NOW).isoformat(), NOW, None))
+
+
 def main():
     failed = 0
     for name, fn in sorted(globals().items()):

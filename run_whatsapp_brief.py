@@ -29,7 +29,7 @@ from agents.writer import (  # noqa: E402  (reuse, do not modify writer.py)
 from agents.deliver import record_delivered, send_alert  # noqa: E402  (§4.3 confirmed-send recording)
 from agents.char_monitor import overrun_flag  # noqa: E402  (NF-F2: over-cap quality flag)
 from litellm import completion  # noqa: E402
-from datetime import datetime  # noqa: E402
+from datetime import datetime, timezone, timedelta  # noqa: E402
 
 try:  # Windows consoles default to cp1252 and crash printing Urdu script.
     sys.stdout.reconfigure(encoding="utf-8")
@@ -116,6 +116,44 @@ def topic_match(article, categories, topic_keywords):
     return False
 
 
+def is_fresh(published_at, now_utc, fresh_hours):
+    """NF-C2: True if the article was published within the last `fresh_hours` (the gap
+    since the previous slot). Pure + tolerant — a bad/blank timestamp is simply not fresh."""
+    if not published_at or fresh_hours is None:
+        return False
+    try:
+        p = datetime.fromisoformat(str(published_at).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return False
+    if p.tzinfo is None:
+        p = p.replace(tzinfo=timezone.utc)
+    return p >= now_utc - timedelta(hours=int(fresh_hours))
+
+
+def gap_refresh():
+    """NF-C2: at the second daily slot, refresh the scored pool with the gap since the
+    06:00 run — fetcher -> classifier -> deduplicator(--apply) -> analyst. Each engine is
+    incremental (only new URLs / branch-null / unscored rows), so this just adds the
+    06:00-11:00 news. Fully wrapped: any stage failure logs + continues, and the brief
+    still builds from whatever is already scored (a refresh problem can never block it)."""
+    base = os.path.dirname(os.path.abspath(__file__))
+    py = sys.executable
+    stages = [
+        ("fetcher",      [py, os.path.join(base, "agents", "fetcher.py")]),
+        ("classifier",   [py, os.path.join(base, "agents", "classifier.py")]),
+        ("deduplicator", [py, os.path.join(base, "agents", "deduplicator.py"), "--apply"]),
+        ("analyst",      [py, os.path.join(base, "agents", "analyst.py")]),
+    ]
+    for name, cmd in stages:
+        try:
+            print(f"  [gap-refresh] {name} ...")
+            r = subprocess.run(cmd, cwd=base, timeout=1800)
+            if r.returncode != 0:
+                print(f"  [gap-refresh] {name} exit {r.returncode} — continuing (brief uses existing scores).")
+        except Exception as e:
+            print(f"  [gap-refresh] {name} EXCEPTION {type(e).__name__}: {e} — continuing.")
+
+
 def generate_brief(config, sb, categories, topic_keywords):
     """Returns (briefing_text, model_used) or (None, None) when nothing qualifies."""
     model = config.get("writer_model", "anthropic/claude-haiku-4-5")
@@ -146,7 +184,18 @@ def generate_brief(config, sb, categories, topic_keywords):
         articles = [a for a in cand if over(a, rel)]
         if len(articles) >= min_themes:
             break
-    print(f"  qualifying (rel>={chosen} or act>=2): {len(articles)}")
+    # NF-C2 weight-fresh-higher: admit articles published in the last `whatsapp_fresh_hours`
+    # at the relevance FLOOR (not the higher day threshold), so genuinely new stories from the
+    # gap-refresh surface even if borderline — without lowering the bar for the whole day.
+    fresh_hours = int(config.get("whatsapp_fresh_hours", 6))
+    now_utc = datetime.now(timezone.utc)
+    chosen_ids = {a["id"] for a in articles}
+    fresh_extra = [a for a in cand if a["id"] not in chosen_ids
+                   and is_fresh(a.get("published_at"), now_utc, fresh_hours) and over(a, rel_floor)]
+    if fresh_extra:
+        articles = articles + fresh_extra
+        print(f"  NF-C2: +{len(fresh_extra)} fresh (<{fresh_hours}h) article(s) admitted at the floor")
+    print(f"  qualifying (rel>={chosen} or act>=2, +fresh@floor): {len(articles)}")
     if not articles:
         return None, None, []
     quiet = len(articles) < min_themes
@@ -286,6 +335,12 @@ def main():
                 ok = ok and rc == 0
         print("\nALL SENT OK." if ok else "\nWARN: a send failed.")
         return 0 if ok else 1
+
+    # NF-C2: on a real send, refresh the pool with the gap since 06:00 so this slot is
+    # genuinely fresh (not a re-filtered copy of the morning). Skipped on dry runs.
+    if args.send and config.get("whatsapp_gap_refresh", True):
+        print("\n=== NF-C2 gap-refresh (fetch -> classify -> dedup -> analyst since the 06:00 run) ===")
+        gap_refresh()
 
     sb = get_supabase()
     cache = {}  # frozenset(categories) -> (text, model)

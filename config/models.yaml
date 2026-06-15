@@ -55,6 +55,16 @@ analyst_max_articles_per_run: 3000   # 2026-06-15: raised 300 -> 3000 to match t
                                      #   real cost tracks ACTUAL volume (cheap Gemini Flash-Lite per article).
 analyst_window_hours: 30
 
+# NF-C2: second-slot freshness — the 11:00 WhatsApp brief used to reuse the 06:00 data
+# (nothing is fetched between slots), so it was never fresher than the morning. These make
+# the 11:00 run gap-fetch the new content first, then weight fresh items so they surface.
+whatsapp_gap_refresh: true     # at the 11:00 slot, refresh the pool (fetch->classify->dedup->analyst
+                               #   on the gap since 06:00) BEFORE building, so the WhatsApp brief sees
+                               #   06:00-11:00 news. false = old behaviour (no intraday fetch). --send only.
+whatsapp_fresh_hours: 6        # an article published within this many hours counts as "fresh" and
+                               #   qualifies at the relevance FLOOR (not the higher day threshold), so a
+                               #   genuinely new story surfaces even if borderline (NF-C2 weight-fresh-higher).
+
 # Writer settings
 writer_model: "anthropic/claude-haiku-4-5"
 writer_fallback_model: "gemini/gemini-2.5-flash-lite"   # Fix 3: degrade to Gemini if Anthropic errors/rate-limits/billing-fails
