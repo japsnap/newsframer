@@ -227,6 +227,37 @@ def confirmed_message_id(rc, stdout):
     return m.group(1) if m else None
 
 
+def maybe_send_worldcup(reg):
+    """Append the World Cup message to the 11:00 dispatch (user-approved 2026-06-15).
+    Runs AFTER the main WhatsApp brief has already sent, and is fully wrapped: any WC
+    failure (fetch/parse/build/send) is caught + alerted and can NEVER affect the main
+    brief. Self-skips when empty or after the tournament ends. Sends to the same chats
+    the registry feeds (group + Muda's DM), minus any with `worldcup: false`."""
+    try:
+        import run_worldcup_brief as wc  # imports worldcup_data/format + deliver only (no litellm)
+        cfg = load_config()
+        end = cfg.get("worldcup_end_date", "2026-07-19")
+        now = datetime.now(JST)
+        if now.date().isoformat() > end:
+            print("  WC: tournament ended; skip.")
+            return
+        html = wc.wd.fetch()
+        pay, msg = wc.build(html, now, cfg)
+        why = wc.skip_reason(pay, now, end)
+        if why:
+            print(f"  WC: skip (no empty send) — {why}.")
+            return
+        confirmed, attempted = wc.deliver(msg, reg)
+        print(f"  WC: {confirmed}/{attempted} target(s) confirmed.")
+    except Exception as e:
+        print(f"  WC: skipped (isolated failure) — {type(e).__name__}: {e}")
+        try:
+            send_alert(f"⚠️ NewsFramer WC (11:00 dispatch): {type(e).__name__} — "
+                       f"WC message skipped; the main WhatsApp brief is unaffected.")
+        except Exception:
+            pass
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--send", action="store_true", help="generate, save, and post to every chat")
@@ -294,6 +325,11 @@ def main():
             print(f"  recorded {n} delivered article_id(s) for whatsapp:{name}")
         elif args.send and not chat_ok:
             print(f"  NOT recorded for {name} (a send failed; alerted).")
+    # World Cup message — a SEPARATE WhatsApp message appended to this same dispatch,
+    # isolated so it can never affect the main brief above (only on a real --send).
+    if args.send:
+        print("\n=== World Cup message (appended, isolated) ===")
+        maybe_send_worldcup(reg)
     if not args.send:
         print("\nDRY RUN — nothing sent. Re-run with --send (or --send-saved to post the saved files).")
     return 0
