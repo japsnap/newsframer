@@ -48,7 +48,11 @@ pricing:
   # "gemini/gemini-2.5-flash":     { input: 0.30, output: 2.50 }   # Claude fallback
   # "gemini/gemini-2.5-pro":       { input: ?,    output: ? }      # Claude fallback
 
-analyst_max_articles_per_run: 300
+analyst_max_articles_per_run: 3000   # 2026-06-15: raised 300 -> 3000 to match the fetch ceiling, so the
+                                     #   bigger 100/source fetch is actually scored (the analyst loads
+                                     #   unscored newest-first; at 300 it silently dropped everything past
+                                     #   the 300 newest -> absent from the brief). A ceiling, not a target:
+                                     #   real cost tracks ACTUAL volume (cheap Gemini Flash-Lite per article).
 analyst_window_hours: 30
 
 # Writer settings
