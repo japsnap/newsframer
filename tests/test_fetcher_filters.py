@@ -89,6 +89,17 @@ def test_junk_patterns():
     ok("no_pattern_match", f.is_junk_url(GOOD_URL, GOOD_TITLE, pats) is False)
 
 
+# --- fetch_one honors scrape_days for RSS too (NF-A1b) --------------------
+def test_fetch_one_gates_rss_by_scrape_days():
+    # An RSS source whose scrape_days does NOT include today is skipped BEFORE any fetch
+    # (early return), so this needs no network. Proves the calendar now gates RSS sources.
+    rss_vc = {"has_rss": True, "rss_url": "http://x/feed", "scrape_days": "wed,sat", "name": "VC blog"}
+    arts, note = f.fetch_one(CFG, rss_vc, False, "mon", 10)
+    ok("rss_off_day_skipped", arts is None and "skip" in note.lower())
+    # And a source with no scrape_days is never gated by the calendar (would proceed to fetch).
+    ok("daily_rss_not_gated", f.scrape_scheduled_today({"has_rss": True, "rss_url": "x"}, "mon") is True)
+
+
 # --- deduplicate_batch (intra-run URL dedup) ------------------------------
 def test_deduplicate_batch():
     arts = [{"url": "a", "title": "1"}, {"url": "b", "title": "2"},

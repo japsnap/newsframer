@@ -77,10 +77,15 @@ def scrape_scheduled_today(source, today_jst):
     return today_jst in [d.strip()[:3] for d in sd.split(",") if d.strip()]
 
 def fetch_one(config, source, is_first_run, today_jst, limit):
-    """Fetch one source honoring §8.1 per-source window + §8.7 scrape-day gate.
-    Returns (articles_or_None, status_note); None means skipped by the scrape calendar."""
-    if is_scrape_source(source) and not scrape_scheduled_today(source, today_jst):
-        return None, f"skipped (scrape day={source.get('scrape_days')}, today={today_jst})"
+    """Fetch one source honoring §8.1 per-source window + §8.7 scrape-day calendar.
+    Returns (articles_or_None, status_note); None means skipped by the calendar.
+
+    NF-A1(b): the `scrape_days` calendar now gates EVERY source, RSS included (it used to
+    apply only to scrape sources), so a low-cadence RSS source like the Wed+Sat VC blogs is
+    fetched only on its days. A null/blank `scrape_days` still means 'run whenever active',
+    so all the daily sources are unaffected."""
+    if not scrape_scheduled_today(source, today_jst):
+        return None, f"skipped (scrape_days={source.get('scrape_days')}, today={today_jst})"
     win = source_window_hours(config, source, is_first_run)
     cutoff = datetime.now(timezone.utc) - timedelta(hours=win)
     if source.get("has_rss") and source.get("rss_url"):
