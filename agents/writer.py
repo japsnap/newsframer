@@ -32,6 +32,7 @@ from drop_reports import (  # noqa: E402
 )
 from bundle_floors import select_themes_with_floors  # noqa: E402
 from char_monitor import overrun_flag  # noqa: E402  (NF-F2: over-cap quality flag)
+from link_monitor import bare_url_flag  # noqa: E402  (NF-NEW1: bare-URL quality flag)
 from source_skew import skew_warning, coverage_note  # noqa: E402  (NF-D3 skew flag + NF-NEW10c one-sided note)
 
 load_dotenv()
@@ -773,6 +774,10 @@ def run_writer():
                             config.get("writer_char_overrun_warn_ratio", 1.0))
     if _overrun:
         print(_overrun)
+    # NF-NEW1: flag (don't fail) any bare/raw URL — citations must be hyperlinked source names.
+    _bareurl = bare_url_flag(briefing_text)
+    if _bareurl:
+        print(_bareurl)
     print(f"Tokens: in={t_in} out={t_out} | Cost: ${cost:.4f} | Time: {duration_ms}ms")
 
     # Store. Record which article IDs went into the brief (clusters + highlights) so the

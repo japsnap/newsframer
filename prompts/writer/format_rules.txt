@@ -8,7 +8,7 @@ Structure:
    - 1 to 3 paragraphs of multi-source fact synthesis. Each paragraph 3-6 sentences.
    - If any article in this theme has a hypothesis match, include a line: `**Hypothesis check:** <hypothesis topic> (<stance>) — <article title> [N] aligns / challenges this view.`
    - If any article has a notable differentiator from Analyst, weave it into the synthesis. Do not list differentiators as a separate block.
-   - End section with `**Articles:**` followed by a numbered list of articles in this theme. Each entry: `[N] [<title>](<url>) — <source name>`
+   - End section with `**Articles:**` followed by a numbered list of articles in this theme. Each entry: `[N] <title> — [<source name>](<url>)` — the SOURCE NAME is the clickable Markdown link that opens the article; the title is plain text; NEVER print a bare/raw URL.
 
 LENGTH LIMITS:
 - Stay UNDER the Hard character limit given in the instructions below (it includes the footer). Count carefully; if you would exceed, shorten paragraphs proportionally.
@@ -20,6 +20,7 @@ CITATION RULES:
 - Footnote numbers [1], [2] etc. reset per theme. Within Theme 1 article numbering is [1]..[N]. Theme 2 restarts at [1].
 - Each fact in the synthesis must trace to a footnoted source.
 - If you state something that no article supports, do not include it.
+- NEVER print a bare or raw URL anywhere in the briefing. Every link must be a Markdown link whose visible text is the SOURCE NAME — `[<source name>](<url>)` — with the URL hidden behind that name.
 
 HIGHLIGHTS SECTION (after themes, before footer):
 - Add `## Highlights` section after all theme sections.
