@@ -81,20 +81,37 @@ def normalize_bias(raw):
     return None
 
 
-def select_representatives(members, bias_of=None, category_of=None, bias_categories=()):
-    """Pick the representative set to KEEP from a same-story cluster (metadata only):
-      - EARLIEST published (initial report) + MOST-DEVELOPED (latest; tie-break longest body).
-      - If the cluster is bias-sensitive (a member's source category is in bias_categories),
-        also one source per Ground-News bias side PRESENT (left/center/right), the most-
-        developed within that side; a side with no source is skipped.
-    Returns (sorted keep_ids, [drop members]). <2 members -> keep all."""
+def select_representatives(members, bias_of=None, category_of=None, bias_categories=(), max_keep=5):
+    """Pick the representative set to KEEP from a same-story cluster (metadata only).
+
+    Coverage IS importance: a story many outlets ran is more important, so keep MORE of it —
+    target = min(max_keep, N) articles (so a cluster of <= max_keep keeps everything; only the
+    big pile-ups get trimmed). The set is:
+      - EARLIEST published (the initial report / first framing), plus
+      - the MOST-DETAILED articles (longest body, tie-break later) filled up to `target` — these
+        carry the fullest, most-developed versions of the story.
+    Bias axis (only when a member's source category is in bias_categories, i.e. geo/pakistan):
+    additionally keep one source per Ground-News side PRESENT (left/center/right), the most-
+    developed within that side — ON TOP of the temporal set, so a lean that the detail-fill
+    missed still survives. A side with no source is skipped.
+
+    NOTE single-source stories are never even passed here (they aren't clusters), so an important
+    story only one outlet ran is always preserved. Returns (sorted keep_ids, [drop members])."""
     bias_of = bias_of or {}
     category_of = category_of or {}
     if len(members) < 2:
         return [m["id"] for m in members], []
+    target = min(max(2, int(max_keep)), len(members))
+
     earliest = min(members, key=lambda m: ((m.get("published_at") or ""), m.get("id") or ""))
     developed = max(members, key=lambda m: ((m.get("published_at") or ""), content_len(m), m.get("id") or ""))
-    keep = {earliest["id"], developed["id"]}
+    keep = {earliest["id"], developed["id"]}     # the initial framing + the latest/most-developed
+    # Fill the remaining slots by most-detailed (longest body), tie-break latest then id —
+    # the next most-substantive versions of the same story.
+    for m in sorted(members, key=lambda m: (-content_len(m), (m.get("published_at") or ""), m.get("id") or "")):
+        if len(keep) >= target:
+            break
+        keep.add(m["id"])
 
     cats = {category_of.get(m.get("source_id")) for m in members}
     if bias_categories and (cats & set(bias_categories)):
@@ -219,6 +236,7 @@ def run_title_dedup(apply=False, only_unscored=None):
     temperature = config.get("title_dedup_temperature", 0)
     max_tokens = int(config.get("title_dedup_max_tokens", 20))
     bias_categories = config.get("title_dedup_bias_categories", ["geopolitics", "pakistan"])
+    max_keep = int(config.get("title_dedup_max_keep", 5))
     t0 = time.time()
 
     print(f"NF-NEW10 Title-dedup v2 [{'APPLY' if apply else 'DRY'}] | model={model} | window={window}h "
@@ -232,7 +250,7 @@ def run_title_dedup(apply=False, only_unscored=None):
     kept_all = 0
     for cid, members in clusters.items():
         same = confirm_same_event([m.get("title") or "" for m in members], model, temperature, max_tokens)
-        keep_ids, drops = select_representatives(members, bias_of, category_of, bias_categories)
+        keep_ids, drops = select_representatives(members, bias_of, category_of, bias_categories, max_keep)
         keep_set = set(keep_ids)
         print("-" * 78)
         print(f"cluster {cid[:8]} | members={len(members)} | same_event={same} -> "

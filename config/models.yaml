@@ -204,6 +204,11 @@ title_dedup_bias_categories: ["geopolitics", "pakistan"]  # NF-NEW10 v2: cluster
                                        #   (left/center/right) when present. Other topics get only the
                                        #   temporal (earliest + most-developed) keepers. Bias axis needs
                                        #   the source bias tags seeded (NF-D1); until then it's a no-op.
+title_dedup_max_keep: 5                # NF-NEW10 v3: keep up to N articles per same-story cluster
+                                       #   (target = min(N, this)). Coverage = importance: a story many
+                                       #   outlets ran keeps more (so it can form its own theme); a cluster
+                                       #   of <=N keeps everything; single-source stories are never touched.
+                                       #   Geo/pakistan add their left/center/right reps on top of this.
 
 # Dispatcher settings
 dispatcher_telegram_msg_limit: 3500

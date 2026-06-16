@@ -45,66 +45,78 @@ def test_normalize_bias():
     ok("unknown", td.normalize_bias("mixed") is None)
 
 
-# --- temporal axis (every topic): earliest + most-developed ---------------
-def test_temporal_keeps_earliest_and_latest():
-    members = [m("a", "2026-06-15T01:00:00+00:00", "s1"),
-               m("b", "2026-06-15T05:00:00+00:00", "s2"),
-               m("c", "2026-06-15T09:00:00+00:00", "s3")]
-    cat = {"s1": "tech", "s2": "tech", "s3": "tech"}
-    keep, drops = td.select_representatives(members, {}, cat, GEO)
-    ok("temporal_keep2", set(keep) == {"a", "c"})              # earliest + latest
-    ok("temporal_drop_mid", [d["id"] for d in drops] == ["b"])
+# --- temporal axis: keep up to max_keep, scaled by cluster size -----------
+def test_small_cluster_keeps_all():
+    # <= max_keep members -> keep everything (nothing important is cut).
+    members = [m("a", "2026-06-15T01:00:00+00:00", "s1", 10),
+               m("b", "2026-06-15T05:00:00+00:00", "s2", 50),
+               m("c", "2026-06-15T09:00:00+00:00", "s3", 99)]
+    keep, drops = td.select_representatives(members, {}, {"s1": "tech", "s2": "tech", "s3": "tech"}, GEO, max_keep=5)
+    ok("keep_all_3", set(keep) == {"a", "b", "c"} and drops == [])
 
 
-def test_developed_tiebreak_by_length():
-    members = [m("a", "2026-06-15T01:00:00+00:00", "s1", clen=10),
-               m("b", "2026-06-15T09:00:00+00:00", "s2", clen=50),
-               m("c", "2026-06-15T09:00:00+00:00", "s3", clen=500)]   # same latest time, longest body
-    keep, drops = td.select_representatives(members, {}, {"s1": "tech", "s2": "tech", "s3": "tech"}, GEO)
-    ok("dev_longest", set(keep) == {"a", "c"})                 # a earliest, c latest+longest
-    ok("dev_drop_b", [d["id"] for d in drops] == ["b"])
+def test_big_temporal_cluster_capped():
+    # 7 tech copies -> keep 5 = earliest + latest + 3 longest; drop the 2 shortest middles.
+    members = [m("a", "2026-06-15T01:00:00+00:00", "sa", 100),
+               m("b", "2026-06-15T02:00:00+00:00", "sb", 900),
+               m("c", "2026-06-15T03:00:00+00:00", "sc", 200),
+               m("d", "2026-06-15T04:00:00+00:00", "sd", 800),
+               m("e", "2026-06-15T05:00:00+00:00", "se", 300),
+               m("ff", "2026-06-15T06:00:00+00:00", "sf", 700),
+               m("g", "2026-06-15T07:00:00+00:00", "sg", 500)]
+    cat = {s: "tech" for s in ("sa", "sb", "sc", "sd", "se", "sf", "sg")}
+    keep, drops = td.select_representatives(members, {}, cat, GEO, max_keep=5)
+    ok("kept_5", len(keep) == 5)
+    ok("kept_set", set(keep) == {"a", "g", "b", "d", "ff"})        # earliest + latest + 3 longest
+    ok("dropped_2", {x["id"] for x in drops} == {"c", "e"})
 
 
-# --- bias axis (geo/pakistan only) ----------------------------------------
-def test_bias_axis_left_center_right():
-    members = [m("a", "2026-06-15T01:00:00+00:00", "sL"),   # left, earliest
-               m("b", "2026-06-15T05:00:00+00:00", "sC"),   # center (earlier)
-               m("c", "2026-06-15T09:00:00+00:00", "sR"),   # right, latest -> developed
-               m("d", "2026-06-15T06:00:00+00:00", "sC2")]  # center (later -> the center rep)
-    cat = {k: "geopolitics" for k in ("sL", "sC", "sR", "sC2")}
-    bias = {"sL": "Left", "sC": "Center", "sR": "Right", "sC2": "Lean Center"}
-    keep, drops = td.select_representatives(members, bias, cat, GEO)
-    ok("bias_keep_set", set(keep) == {"a", "c", "d"})         # early=a, dev=c, left=a, center=d, right=c
-    ok("bias_drop_b", [x["id"] for x in drops] == ["b"])      # b is a worse center than d
+def test_max_keep_param_caps():
+    members = [m("a", "2026-06-15T01:00:00+00:00", "sa", 100),
+               m("b", "2026-06-15T02:00:00+00:00", "sb", 900),
+               m("c", "2026-06-15T03:00:00+00:00", "sc", 500)]
+    keep, _ = td.select_representatives(members, {}, {"sa": "tech", "sb": "tech", "sc": "tech"}, GEO, max_keep=2)
+    ok("max2", set(keep) == {"a", "c"})                            # earliest + latest only
+
+
+# --- bias axis (geo/pakistan only) — 3 categories: left / center / right ---
+# A 7-copy cluster where the temporal detail-fill (top-5) MISSES the lone, short right source.
+_MIX = [("a", "01", "sL1", 100), ("r", "02", "sR", 50), ("b", "03", "sL2", 900),
+        ("c", "04", "sC", 800), ("d", "05", "sL3", 700), ("e", "06", "sL4", 400),
+        ("g", "07", "sL5", 600)]
+_BIAS = {"sL1": "left", "sL2": "left", "sL3": "left", "sL4": "left", "sL5": "left", "sC": "center", "sR": "right"}
+
+
+def _mix(category):
+    members = [m(i, f"2026-06-15T{h}:00:00+00:00", s, c) for i, h, s, c in _MIX]
+    return members, {s: category for _, _, s, _ in _MIX}
+
+
+def test_bias_axis_adds_missing_lean():
+    members, cat = _mix("geopolitics")
+    keep, drops = td.select_representatives(members, _BIAS, cat, GEO, max_keep=5)
+    ok("right_rep_added", "r" in keep)                  # temporal missed it; the bias axis added it
+    ok("kept_6", len(keep) == 6)
+    ok("dropped_e_only", {x["id"] for x in drops} == {"e"})
 
 
 def test_bias_skipped_for_non_bias_category():
-    members = [m("a", "2026-06-15T01:00:00+00:00", "sL"),
-               m("b", "2026-06-15T05:00:00+00:00", "sR"),
-               m("c", "2026-06-15T09:00:00+00:00", "sC")]
-    cat = {"sL": "tech", "sR": "tech", "sC": "tech"}
-    bias = {"sL": "Left", "sR": "Right", "sC": "Center"}
-    keep, drops = td.select_representatives(members, bias, cat, GEO)
-    ok("tech_no_bias_split", set(keep) == {"a", "c"})         # temporal only despite bias tags
-    ok("tech_drop_mid", [d["id"] for d in drops] == ["b"])
+    members, cat = _mix("tech")                         # same cluster, but tech -> NO bias axis
+    keep, _ = td.select_representatives(members, _BIAS, cat, GEO, max_keep=5)
+    ok("tech_no_right_forced", "r" not in keep and len(keep) == 5)
 
 
 def test_bias_missing_side_not_forced():
-    members = [m("a", "2026-06-15T01:00:00+00:00", "sL"),     # left
-               m("b", "2026-06-15T09:00:00+00:00", "sC")]     # center, no right
+    members = [m("a", "2026-06-15T01:00:00+00:00", "sL", 100), m("b", "2026-06-15T09:00:00+00:00", "sC", 50)]
     cat = {"sL": "pakistan", "sC": "pakistan"}
-    bias = {"sL": "Left", "sC": "Center"}
-    keep, drops = td.select_representatives(members, bias, cat, GEO)
+    keep, drops = td.select_representatives(members, {"sL": "left", "sC": "center"}, cat, GEO, max_keep=5)
     ok("missing_side", set(keep) == {"a", "b"} and drops == [])   # both kept, no right invented
 
 
 def test_bias_unseeded_degrades_to_temporal():
-    members = [m("a", "2026-06-15T01:00:00+00:00", "s1"),
-               m("b", "2026-06-15T05:00:00+00:00", "s2"),
-               m("c", "2026-06-15T09:00:00+00:00", "s3")]
-    cat = {"s1": "geopolitics", "s2": "geopolitics", "s3": "geopolitics"}
-    keep, _ = td.select_representatives(members, {}, cat, GEO)   # bias_of empty -> unseeded
-    ok("unseeded_temporal", set(keep) == {"a", "c"})
+    members, cat = _mix("geopolitics")
+    keep, _ = td.select_representatives(members, {}, cat, GEO, max_keep=5)   # bias_of empty -> unseeded
+    ok("unseeded_no_right", "r" not in keep and len(keep) == 5)   # falls back to temporal-only
 
 
 def test_select_singleton_and_empty():
