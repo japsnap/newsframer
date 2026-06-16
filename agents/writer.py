@@ -33,6 +33,7 @@ from drop_reports import (  # noqa: E402
 from bundle_floors import select_themes_with_floors  # noqa: E402
 from char_monitor import overrun_flag  # noqa: E402  (NF-F2: over-cap quality flag)
 from link_monitor import bare_url_flag  # noqa: E402  (NF-NEW1: bare-URL quality flag)
+from window_audit import window_span_report  # noqa: E402  (NF-NEW2: provable 24h window)
 from source_skew import skew_warning, coverage_note  # noqa: E402  (NF-D3 skew flag + NF-NEW10c one-sided note)
 
 load_dotenv()
@@ -596,6 +597,10 @@ def run_writer():
     candidates, total_in_window = load_window_scored_articles(
         sb, window_hours, exclude_account=delivery_account
     )
+    # NF-NEW2: prove, in the run log, how far back this session actually reached.
+    fresh_h = int(config.get("whatsapp_fresh_hours", 6))
+    print("  " + window_span_report([a.get("published_at") for a in candidates],
+                                     window_hours, datetime.now(timezone.utc), fresh_h))
     sources_map = load_sources_map(sb)
 
     # Drop-reports (spec 8.5): investigative-category sources are handled on a wider

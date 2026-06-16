@@ -28,6 +28,7 @@ from agents.writer import (  # noqa: E402  (reuse, do not modify writer.py)
 )
 from agents.deliver import record_delivered, send_alert  # noqa: E402  (§4.3 confirmed-send recording)
 from agents.char_monitor import overrun_flag  # noqa: E402  (NF-F2: over-cap quality flag)
+from agents.window_audit import window_span_report  # noqa: E402  (NF-NEW2: provable 24h window)
 from litellm import completion  # noqa: E402
 from datetime import datetime, timezone, timedelta  # noqa: E402
 
@@ -180,6 +181,11 @@ def generate_brief(config, sb, categories, topic_keywords):
     sources_map = {s["id"]: s.get("name", "Unknown") for s in (r.data or [])}
     cand = [a for a in candidates if topic_match(a, categories, topic_keywords)]
     print(f"  in-window scored: {len(candidates)} | topic-match {categories}: {len(cand)}")
+    # NF-NEW2: prove the refreshed-topic set really spans ~24h (existing ~19h + the 06:00->11:00 gap).
+    _fresh_h = int(config.get("whatsapp_fresh_hours", 6))
+    print("  " + window_span_report([a.get("published_at") for a in cand],
+                                     window_hours, datetime.now(timezone.utc), _fresh_h,
+                                     label=f"WINDOW {categories}"))
 
     def over(a, rel):
         s = a["score"]
