@@ -117,6 +117,20 @@ def test_format_fixtures_tz_and_fallback():
     ok("fx_raw_fallback", "9:00 p.m. UTC-5" in s2)
 
 
+def test_format_live():
+    live = [{"home": {"name": "Iran", "iso2": "IR"}, "away": {"name": "New Zealand", "iso2": "NZ"}}]
+    s = wc.format_live(live)
+    ok("live_header", "In progress" in s)
+    ok("live_teams", "Iran" in s and "New Zealand" in s)
+    ok("live_marker", "live now" in s)
+    ok("live_flags", "🇮🇷" in s and "🇳🇿" in s)
+    ok("live_empty", wc.format_live([]) == "" and wc.format_live(None) == "")
+    # in the full message the live section sits between results and fixtures
+    msg = wc.format_worldcup_message([], [], [{"home": {"name": "A"}, "away": {"name": "B"}, "kickoff": "x"}],
+                                     live=live)
+    ok("live_before_fixtures", msg.index("In progress") < msg.index("Next 24 hours"))
+
+
 def test_full_message_assembly():
     msg = wc.format_worldcup_message(
         results=[{"home": {"name": "Argentina", "iso2": "AR"},

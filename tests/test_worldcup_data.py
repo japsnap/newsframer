@@ -138,11 +138,34 @@ def test_rolling_window_beats_venue_date():
     ok("future_not_result", len(pay2["results"]) == 0)
 
 
+def test_live_bucket_in_progress():
+    # The Iran-NZ bug: an unplayed match (no final score) that kicked off ~1h before `now`
+    # is IN PROGRESS — it must not fall in the gap between results (finished) and fixtures
+    # (future). kickoff = 06-15 16:00 UTC-4 = 06-15 20:00 UTC; now = 06-15 21:00 UTC (1h after).
+    html = (
+        '<div class="footballbox"><div class="fleft"><time>'
+        '<div class="fdate">June 15, 2026<span style="display:none"> '
+        '(<span class="bday">2026-06-15</span>)</span></div>'
+        '<div class="ftime">4:00 p.m. <a href="/wiki/UTC">UTC-4</a></div></time></div>'
+        '<table class="fevent"><tbody><tr itemprop="name">'
+        '<th class="fhome" itemprop="homeTeam"><span itemprop="name"><a href="/wiki/Iran">Iran</a></span></th>'
+        '<th class="fscore"><a href="/wiki/2026_FIFA_World_Cup_Group_G">v</a></th>'
+        '<th class="faway" itemprop="awayTeam"><span itemprop="name"><a href="/wiki/New_Zealand">New Zealand</a></span></th>'
+        '</tr></tbody></table></div>'
+    )
+    now = datetime(2026, 6, 16, 6, 0, tzinfo=JST)   # 06-15 21:00 UTC
+    pay = wd.build_payload(html, now)
+    ok("live_one", len(pay["live"]) == 1)
+    ok("live_team", pay["live"][0]["home"]["name"] == "Iran")
+    ok("live_not_result", len(pay["results"]) == 0)
+    ok("live_not_fixture", len(pay["fixtures"]) == 0)
+
+
 def test_empty_html_safe():
     ok("empty_matches", wd.parse_matches("") == [])
     ok("empty_standings", wd.parse_standings("") == [])
     p = wd.build_payload("", datetime(2026, 6, 15, tzinfo=JST))
-    ok("empty_payload", p["results"] == [] and p["fixtures"] == [] and p["standings"] == [])
+    ok("empty_payload", p["results"] == [] and p["fixtures"] == [] and p["standings"] == [] and p["live"] == [])
 
 
 def main():

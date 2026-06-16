@@ -153,6 +153,9 @@ worldcup_result_window_hours: 24       # results = FINISHED matches that kicked 
                                        #   a TRUE rolling window by real kickoff time, NOT a venue-date cut
                                        #   (WC venues are in the US/behind UTC, so a venue date lags real time)
 worldcup_fixture_window_hours: 24      # fixtures = matches kicking off within the next N hours (rolling)
+worldcup_live_window_hours: 4          # a match that kicked off in the last N hours with no final score
+                                       #   yet shows as "🔴 In progress" — else an in-play match falls in
+                                       #   the gap between results (finished) and fixtures (future) and vanishes
 worldcup_display_tz: "Asia/Karachi"    # label for the "Next 24 hours" kickoff times (Pakistan time)
 worldcup_display_utc_offset_hours: 5   # offset used to CONVERT kickoffs (this Windows host has no IANA
                                        #   tzdata, so zoneinfo can't resolve the name; Pakistan has no

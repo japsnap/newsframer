@@ -189,16 +189,21 @@ def _kickoff_utc(date_str, time_str):
     return venue - timedelta(hours=int(om.group(1)))   # venue-local -> UTC
 
 
-def build_payload(html, now, result_window_hours=24, fixture_window_hours=24):
-    """results = FINISHED matches that kicked off within the last `result_window_hours`;
-    fixtures = upcoming matches kicking off within the next `fixture_window_hours` — a TRUE
-    rolling window from `now` (tz-aware, pass JST), NOT a calendar-day cut. A match whose
-    kickoff time can't be parsed falls back to a date-based window so it's never lost."""
+def build_payload(html, now, result_window_hours=24, fixture_window_hours=24, live_window_hours=4):
+    """Bucket matches around `now` (tz-aware, pass JST) by their REAL kickoff time — a true
+    rolling window, NOT a calendar-day cut:
+      results  = FINISHED matches that kicked off within the last `result_window_hours`.
+      live     = matches that kicked off in the last `live_window_hours` but have NO final
+                 score yet (in progress) — without this they fall in the gap between the two
+                 windows and vanish (a match kicked off but not finished is neither a result
+                 nor a future fixture).
+      fixtures = matches kicking off within the next `fixture_window_hours`.
+    A match whose kickoff time can't be parsed falls back to a date window so it's never lost."""
     now_utc = now.astimezone(timezone.utc)
     today = now.date()
     rd = max(1, round(result_window_hours / 24))
     fd = max(1, round(fixture_window_hours / 24))
-    results, fixtures = [], []
+    results, fixtures, live = [], [], []
     for m in parse_matches(html):
         if not m.get("date"):
             continue
@@ -215,9 +220,13 @@ def build_payload(html, now, result_window_hours=24, fixture_window_hours=24):
                                 "home_score": m["home_score"], "away_score": m["away_score"],
                                 "goals": m["goals"]})
         elif not m["played"]:
-            keep = (0 <= (ku - now_utc).total_seconds() <= fixture_window_hours * 3600) if ku is not None \
-                else (d is not None and 0 <= (d - today).days <= fd)
-            if keep:
-                fixtures.append({"home": m["home"], "away": m["away"],
-                                 "kickoff": m.get("time", ""), "date": m["date"]})
-    return {"results": results, "standings": parse_standings(html), "fixtures": fixtures}
+            entry = {"home": m["home"], "away": m["away"], "kickoff": m.get("time", ""), "date": m["date"]}
+            if ku is not None:
+                ahead = (ku - now_utc).total_seconds()
+                if 0 <= ahead <= fixture_window_hours * 3600:
+                    fixtures.append(entry)
+                elif -live_window_hours * 3600 <= ahead < 0:   # kicked off recently, no final score -> live
+                    live.append(entry)
+            elif d is not None and 0 <= (d - today).days <= fd:
+                fixtures.append(entry)
+    return {"results": results, "live": live, "standings": parse_standings(html), "fixtures": fixtures}

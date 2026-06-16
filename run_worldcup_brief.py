@@ -82,13 +82,14 @@ def build(html, now, cfg=None):
     cfg = cfg or {}
     rw = int(cfg.get("worldcup_result_window_hours", 24))
     fw = int(cfg.get("worldcup_fixture_window_hours", 24))
+    lw = int(cfg.get("worldcup_live_window_hours", 4))
     off = cfg.get("worldcup_display_utc_offset_hours", 5)
     off = int(off) if off is not None else None
     label = cfg.get("worldcup_display_tz_label", "PKT / UTC+5")
     reply = cfg.get("worldcup_reply_line", "")
-    pay = wd.build_payload(html, now, rw, fw)
+    pay = wd.build_payload(html, now, rw, fw, lw)
     msg = wf.format_worldcup_message(
-        pay["results"], pay["standings"], pay["fixtures"],
+        pay["results"], pay["standings"], pay["fixtures"], live=pay.get("live"),
         tz_offset_hours=off, tz_label=label, reply_line=reply,
     )
     return pay, msg
@@ -98,8 +99,8 @@ def skip_reason(pay, now, end_date):
     """Why to skip (avoid an empty send): tournament over, or nothing in the windows."""
     if end_date and now.date().isoformat() > end_date:
         return f"tournament ended ({end_date})"
-    if not pay["results"] and not pay["fixtures"]:
-        return "no recent results and no upcoming fixtures"
+    if not pay["results"] and not pay["fixtures"] and not pay.get("live"):
+        return "no recent results, live matches, or upcoming fixtures"
     return None
 
 

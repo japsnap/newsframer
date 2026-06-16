@@ -173,15 +173,30 @@ def format_fixtures(fixtures, tz_offset_hours=None, tz_label=""):
     return "\n".join(out)
 
 
-def format_worldcup_message(results, standings, fixtures, wrap_up=None,
+def format_live(live):
+    """Matches in progress (kicked off, no final score yet) — without this a match that is
+    being played at brief-build time vanishes (it's neither a finished result nor a future
+    fixture). Shown as a simple live line; the next slot carries the final score."""
+    if not live:
+        return ""
+    out = ["🔴 *In progress*"]
+    for fx in live or []:
+        h, a = fx.get("home", {}), fx.get("away", {})
+        line = " ".join(p for p in (flag(h), _name(h), "vs", _name(a), flag(a)) if p)
+        out.append(f"{line} — _live now_")
+    return "\n".join(out)
+
+
+def format_worldcup_message(results, standings, fixtures, live=None, wrap_up=None,
                             tz_offset_hours=None, tz_label="", reply_line=""):
-    """Assemble the full World Cup WhatsApp message. Section order: results ->
-    next-24h fixtures -> group standings. wrap_up is the optional written summary
+    """Assemble the full World Cup WhatsApp message. Section order: results -> in-progress
+    -> next-24h fixtures -> group standings. wrap_up is the optional written summary
     (generated FROM the same structured data — never news). reply_line is an optional
     closing invite (e.g. 'Any questions, reply'); kept config-driven so the text/toggle
     lives in config, not code."""
     parts = ["🏆 *World Cup 2026 — Daily Update*",
              format_results(results),
+             format_live(live),
              format_fixtures(fixtures, tz_offset_hours, tz_label),
              format_standings(standings)]
     if wrap_up:
