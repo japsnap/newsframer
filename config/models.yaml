@@ -217,6 +217,37 @@ title_dedup_max_keep: 5                # NF-NEW10 v3: keep up to N articles per 
                                        #   of <=N keeps everything; single-source stories are never touched.
                                        #   Geo/pakistan add their left/center/right reps on top of this.
 
+# --- NF-C1: news-context-shift sequencing (spec §4.4) -------------------------------------
+# A Writer post-pass that emits a one-line "what changed" note when an ongoing story's tracked
+# FACT shifts day-over-day (data-to-data per §4.3; never diffs prose / prior brief text).
+# OFF BY DEFAULT: when sequencing_enabled is false the Writer never calls it and the brief is
+# byte-for-byte unchanged. State persists in the Supabase `tracked_threads` table; weekly hard
+# reset on the Monday-06:00-JST boundary (§4.2). Telegram brief only for now (WhatsApp = backlog).
+sequencing_enabled: false              # master switch (false => pipeline byte-for-byte unchanged)
+sequencing_placement: ["subsection", "inline"]  # where notes show: 'subsection' (## What Changed)
+                                       #   and/or 'inline' (woven into the matching theme). Both on.
+sequencing_model: "gemini/gemini-2.5-flash-lite"  # Stage A structured-fact extraction (cheapest)
+sequencing_temperature: 0              # deterministic extraction
+sequencing_max_tokens: 200             # one small JSON fact per story
+sequencing_snippet_chars: 1200         # per-article text given to the extractor
+sequencing_match_similarity: 0.83      # Stage 0: cosine to call today's story the SAME thread
+sequencing_context_window_hours: 168   # 7-day context window for sequencing (§4.4; NOT selection)
+sequencing_watchlist_lookback_days: 30 # tagged long-running stories earn the 30-day tail
+sequencing_trajectory_points: 3        # keep last-N points per thread (cumulative tally path)
+sequencing_max_threads_per_run: 40     # cap Stage A calls/run (cost guard)
+sequencing_max_notes_per_brief: 5      # cap shift notes shown in one brief
+sequencing_min_confidence: 0.5         # drop low-confidence extractions (0 = keep all)
+sequencing_weekly_reset_day: "mon"     # §4.2 hard-reset weekday (JST 06:00 boundary)
+sequencing_materiality:                # per-type bars; a change must clear ABS or PCT-of-prior
+  magnitude_abs: 1                      #   single value moved (casualties/money/units)
+  magnitude_pct: 0.15
+  cumulative_abs: 1                     #   running tally — any real climb counts
+  cumulative_pct: 0.0
+  forecast_abs: 1                       #   prediction vs actual divergence
+  forecast_pct: 0.10
+sequencing_watchlist: []               # optional named threads that always get the 30-day tail
+                                       #   (autodetection covers recurring stories; this is additive)
+
 # Dispatcher settings
 dispatcher_telegram_msg_limit: 3500
 dispatcher_target_language: "en"

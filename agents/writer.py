@@ -34,6 +34,7 @@ from bundle_floors import select_themes_with_floors  # noqa: E402
 from char_monitor import overrun_flag  # noqa: E402  (NF-F2: over-cap quality flag)
 from link_monitor import bare_url_flag  # noqa: E402  (NF-NEW1: bare-URL quality flag)
 from window_audit import window_span_report  # noqa: E402  (NF-NEW2: provable 24h window)
+import thread_tracker as seq  # noqa: E402  (NF-C1 §4.4 sequencing; only invoked when enabled)
 from source_skew import skew_warning, coverage_note  # noqa: E402  (NF-D3 skew flag + NF-NEW10c one-sided note)
 
 load_dotenv()
@@ -350,7 +351,8 @@ def build_highlights_block(highlights, sources_map):
 
 
 def build_user_prompt(clusters, highlights, sources_map, by_hypothesis_id, context,
-                     total_in_window, relevant_count, briefing_date, max_chars, coverage_notes=None):
+                     total_in_window, relevant_count, briefing_date, max_chars, coverage_notes=None,
+                     shift_notes=None):
     context_block = build_context_block(context)
     articles_block = build_articles_block(clusters, sources_map, by_hypothesis_id, coverage_notes)
     highlights_block = build_highlights_block(highlights, sources_map)
@@ -377,6 +379,18 @@ def build_user_prompt(clusters, highlights, sources_map, by_hypothesis_id, conte
         f"clusters without that marker.\n"
         f"- Output ONLY the Markdown briefing. No preamble, no postamble.\n"
     )
+
+    # NF-C1 (§4.4): pre-computed, data-verified day-over-day shift notes to weave inline into the
+    # named theme. Empty/None -> no change to the prompt (byte-for-byte identical when off).
+    if shift_notes:
+        seq_lines = "\n".join(
+            f"  - Theme {n.get('theme_idx', 0) + 1}: {n.get('line', '')}" for n in shift_notes if n.get("line"))
+        if seq_lines:
+            instructions += (
+                "\n- NEWS-SHIFT UPDATES (data-verified, §4.4): each line below is a pre-computed factual "
+                "change since prior days for a specific theme. Weave the matching update into that "
+                "theme's prose as ONE natural sentence. You may rephrase surrounding words but NEVER "
+                "alter the numbers, names, status words, or the source link inside it:\n" + seq_lines + "\n")
 
     return f"{context_block}\n\n{articles_block}\n\n{highlights_block}\n{instructions}"
 
@@ -731,9 +745,29 @@ def run_writer():
             print(f"  NF-NEW10c: {_onesided} theme(s) flagged one-sided (left/right media only)")
     except Exception as _e:
         theme_coverage = []
+
+    # NF-C1 sequencing (§4.4): detect cross-day fact shifts as a post-pass. OFF by default
+    # (sequencing_enabled=false) => never called, brief byte-for-byte unchanged. Fully wrapped:
+    # any failure is isolated and can never alter or block the brief.
+    shift_notes, shift_section = [], ""
+    if config.get("sequencing_enabled", False):
+        try:
+            placement = config.get("sequencing_placement", ["subsection", "inline"]) or []
+            shift_notes, shift_section = seq.detect_and_record(
+                sb, config, clusters, sources_map, datetime.now(timezone.utc), apply=True)
+            if "inline" not in placement:
+                shift_notes = []        # subsection-only: don't weave into themes
+            if "subsection" not in placement:
+                shift_section = ""      # inline-only: don't add the section
+            print(f"  NF-C1: {len(shift_notes)} inline note(s); subsection={'yes' if shift_section else 'no'}")
+        except Exception as _se:
+            print(f"  NF-C1 sequencing skipped (isolated): {type(_se).__name__}: {_se}")
+            shift_notes, shift_section = [], ""
+
     user_prompt = build_user_prompt(
         clusters, highlights, sources_map, context["by_id"], context,
-        total_in_window, relevant_count, briefing_date, max_chars, coverage_notes=theme_coverage
+        total_in_window, relevant_count, briefing_date, max_chars, coverage_notes=theme_coverage,
+        shift_notes=shift_notes
     )
 
     messages = [
@@ -763,6 +797,8 @@ def run_writer():
     briefing_text = splice_investigations(
         briefing_text, render_investigations_section([d["render"] for d in drops])
     )
+    # NF-C1 (§4.4): add the deterministic "What Changed" subsection (empty when off/no deltas).
+    briefing_text = seq.splice_what_changed(briefing_text, shift_section)
 
     usage = getattr(response, "usage", None)
     t_in = getattr(usage, "prompt_tokens", 0) if usage else 0
