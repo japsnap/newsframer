@@ -26,6 +26,29 @@ def _norm(raw):
     return None
 
 
+def coverage_note(source_biases):
+    """One-sided-coverage note for a single story/theme (stricter than skew_warning, used for
+    the user-facing 'left/right media only' line). One vote per DISTINCT source:
+      - every known-lean source is left  -> 'left'  ("left media only" — no center, no right),
+      - every known-lean source is right -> 'right',
+      - any center source, both sides, or no placed source -> None.
+    Pure; tolerant of malformed items."""
+    by_source = {}
+    for item in (source_biases or []):
+        try:
+            sid, bias = item
+        except (ValueError, TypeError):
+            continue
+        if sid not in by_source:
+            by_source[sid] = _norm(bias)
+    placed = {v for v in by_source.values() if v}
+    if placed == {"left"}:
+        return "left"
+    if placed == {"right"}:
+        return "right"
+    return None
+
+
 def skew_warning(source_biases, min_sources=3, skew_ratio=0.75):
     """source_biases: iterable of (source_id, raw_bias_label) for a theme's articles.
 

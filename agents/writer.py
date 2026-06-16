@@ -32,7 +32,7 @@ from drop_reports import (  # noqa: E402
 )
 from bundle_floors import select_themes_with_floors  # noqa: E402
 from char_monitor import overrun_flag  # noqa: E402  (NF-F2: over-cap quality flag)
-from source_skew import skew_warning    # noqa: E402  (NF-D3: log-only source-bias skew flag)
+from source_skew import skew_warning, coverage_note  # noqa: E402  (NF-D3 skew flag + NF-NEW10c one-sided note)
 
 load_dotenv()
 
@@ -283,11 +283,15 @@ def build_context_block(context):
     return "\n".join(lines)
 
 
-def build_articles_block(clusters, sources_map, by_hypothesis_id):
-    """Format clusters as structured input for Writer LLM."""
+def build_articles_block(clusters, sources_map, by_hypothesis_id, coverage_notes=None):
+    """Format clusters as structured input for Writer LLM. coverage_notes (NF-NEW10c,
+    optional) is a list aligned with clusters; 'left'/'right' marks a one-sided theme so the
+    LLM appends the media-only warning to exactly that section."""
     lines = ["CLUSTERED ARTICLES (each cluster becomes one theme):"]
     for i, cluster in enumerate(clusters, 1):
-        lines.append(f"\n=== Cluster {i} ({len(cluster)} articles) ===")
+        note = (coverage_notes[i - 1] if coverage_notes and i - 1 < len(coverage_notes) else None)
+        tag = f" [ONE-SIDED COVERAGE: {note}]" if note in ("left", "right") else ""
+        lines.append(f"\n=== Cluster {i} ({len(cluster)} articles){tag} ===")
         for a in cluster:
             s = a["score"]
             src_name = sources_map.get(a.get("source_id"), "Unknown")
@@ -344,9 +348,9 @@ def build_highlights_block(highlights, sources_map):
 
 
 def build_user_prompt(clusters, highlights, sources_map, by_hypothesis_id, context,
-                     total_in_window, relevant_count, briefing_date, max_chars):
+                     total_in_window, relevant_count, briefing_date, max_chars, coverage_notes=None):
     context_block = build_context_block(context)
-    articles_block = build_articles_block(clusters, sources_map, by_hypothesis_id)
+    articles_block = build_articles_block(clusters, sources_map, by_hypothesis_id, coverage_notes)
     highlights_block = build_highlights_block(highlights, sources_map)
     theme_count = len(clusters)
     highlight_count = len(highlights)
@@ -363,6 +367,12 @@ def build_user_prompt(clusters, highlights, sources_map, by_hypothesis_id, conte
         f"  ---\n"
         f"  _Briefing generated from {total_in_window} articles. {relevant_count} made the relevance cutoff. {theme_count} themes, {highlight_count} highlights._\n"
         f"- If highlights count is 0, OMIT the ## Highlights section entirely.\n"
+        f"- One-sided coverage (NF-NEW10c): if a cluster header is marked "
+        f"'[ONE-SIDED COVERAGE: left]', make the FINAL line of that theme's section exactly "
+        f"'_⚠ Left-leaning media only — opposing view absent._'; for "
+        f"'[ONE-SIDED COVERAGE: right]' use "
+        f"'_⚠ Right-leaning media only — opposing view absent._'. Add nothing for "
+        f"clusters without that marker.\n"
         f"- Output ONLY the Markdown briefing. No preamble, no postamble.\n"
     )
 
@@ -649,6 +659,7 @@ def run_writer():
           f"by-score={floor_report['before']} floored={floor_report['after']}")
     # NF-D3: log-only source-skew flag per theme (uses the NF-D1 Ground-News bias tags).
     # Fully wrapped — a bias-data hiccup just skips the check; it NEVER alters the brief.
+    _bias_of = {}
     try:
         _bias_rows = sb.table("sources").select("id, groundnews_publication_bias").execute().data or []
         _bias_of = {r["id"]: r.get("groundnews_publication_bias") for r in _bias_rows}
@@ -704,9 +715,19 @@ def run_writer():
     briefing_date = now_jst.strftime("%Y-%m-%d (%H:%M JST)")
     system_prompt = load_prompt_files()
     relevant_count = len(articles)
+    # NF-NEW10c: per-theme one-sided-coverage note (left/right media only), reflecting the FINAL
+    # clusters (incl. woven drops). Wrapped — a hiccup just yields no notes; never breaks the brief.
+    try:
+        theme_coverage = [coverage_note([(a.get("source_id"), _bias_of.get(a.get("source_id"))) for a in c])
+                          for c in clusters]
+        _onesided = sum(1 for n in theme_coverage if n)
+        if _onesided:
+            print(f"  NF-NEW10c: {_onesided} theme(s) flagged one-sided (left/right media only)")
+    except Exception as _e:
+        theme_coverage = []
     user_prompt = build_user_prompt(
         clusters, highlights, sources_map, context["by_id"], context,
-        total_in_window, relevant_count, briefing_date, max_chars
+        total_in_window, relevant_count, briefing_date, max_chars, coverage_notes=theme_coverage
     )
 
     messages = [

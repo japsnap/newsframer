@@ -73,6 +73,19 @@ def test_tolerant_of_malformed():
     ok("bad_items", ss.skew_warning([("a", "Left"), None, "x", ("b",), ("c", "Left"), ("d", "Left")]) is not None)
 
 
+# --- coverage_note (user-facing 'left/right media only') ------------------
+def test_coverage_note():
+    ok("all_left", ss.coverage_note([("a", "left"), ("b", "left")]) == "left")
+    ok("all_right", ss.coverage_note([("a", "right"), ("b", "right")]) == "right")
+    ok("single_left", ss.coverage_note([("a", "left")]) == "left")
+    ok("left_plus_center_is_none", ss.coverage_note([("a", "left"), ("b", "center")]) is None)
+    ok("both_sides_none", ss.coverage_note([("a", "left"), ("b", "right")]) is None)
+    ok("only_center_none", ss.coverage_note([("a", "center"), ("b", "center")]) is None)
+    ok("dedup_one_source", ss.coverage_note([("a", "left"), ("a", "left"), ("a", "left")]) == "left")
+    ok("unknown_ignored", ss.coverage_note([("a", "left"), ("b", None), ("c", "weird")]) == "left")
+    ok("empty_none", ss.coverage_note([]) is None and ss.coverage_note(None) is None)
+
+
 def main():
     failed = 0
     for name, fn in sorted(globals().items()):

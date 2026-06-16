@@ -48,6 +48,17 @@ def test_no_topics_still_clusters():
     ok("no_topics_kept", len(themes) == 1 and themes[0][0]["id"] == "notopics")
 
 
+# --- NF-NEW10c: build_articles_block tags one-sided themes for the LLM -----
+def test_articles_block_coverage_tag():
+    clusters = [[art("a", ["x"])], [art("b", ["y"])]]
+    tagged = w.build_articles_block(clusters, {}, {}, coverage_notes=["left", None])
+    ok("left_tag_present", "[ONE-SIDED COVERAGE: left]" in tagged)
+    ok("cluster1_tagged", "Cluster 1 (1 articles) [ONE-SIDED COVERAGE: left]" in tagged)
+    ok("cluster2_untagged", "Cluster 2 (1 articles) ===" in tagged)
+    untagged = w.build_articles_block(clusters, {}, {})   # no coverage_notes -> no marker at all
+    ok("no_marker_by_default", "ONE-SIDED COVERAGE" not in untagged)
+
+
 # --- cluster_by_topic_overlap: grouping rules ------------------------------
 def test_two_shared_topics_group():
     a = art("a", ["x", "y", "z"], rel=9)
