@@ -190,8 +190,10 @@ deduplicator_high_similarity_threshold: 0.90
 # cluster, a cheap titles-only LLM confirms "one event?" and on yes soft-deletes all but
 # the originator, so the analyst scores one copy per story. Soft-delete only (audit trail
 # intact). agents/title_dedup.py is DRY by default; --apply collapses.
-title_dedup_enabled: false             # wiring gate: false = NOT in the live pipeline yet (run by hand).
-                                       #   Flip to true only after wiring it before the analyst stage.
+title_dedup_enabled: true              # 2026-06-16: ACTIVATED. Runs before the analyst in run_brief +
+                                       #   the 11:00 gap-refresh; collapses same-story clusters to the
+                                       #   representative set (earliest + most-developed; +left/center/right
+                                       #   for geo/pakistan once NF-D1 seeds the bias tags). Set false to disable.
 title_dedup_model: "gemini/gemini-2.5-flash-lite"   # titles-only confirm; cheapest model
 title_dedup_window_hours: 48           # match the deduplicator window (cluster_id is set there)
 title_dedup_only_unscored: true        # only collapse copies the analyst has NOT scored yet (pre-paid stage)
