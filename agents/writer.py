@@ -32,6 +32,7 @@ from drop_reports import (  # noqa: E402
 )
 from bundle_floors import select_themes_with_floors  # noqa: E402
 from char_monitor import overrun_flag  # noqa: E402  (NF-F2: over-cap quality flag)
+from source_skew import skew_warning    # noqa: E402  (NF-D3: log-only source-bias skew flag)
 
 load_dotenv()
 
@@ -646,6 +647,17 @@ def run_writer():
     print(f"  Bundle floors: {floor_report['num_active']} active bundle(s) -> "
           f"{floor_report['theme_count']}/{floor_report['target_total']} themes | "
           f"by-score={floor_report['before']} floored={floor_report['after']}")
+    # NF-D3: log-only source-skew flag per theme (uses the NF-D1 Ground-News bias tags).
+    # Fully wrapped — a bias-data hiccup just skips the check; it NEVER alters the brief.
+    try:
+        _bias_rows = sb.table("sources").select("id, groundnews_publication_bias").execute().data or []
+        _bias_of = {r["id"]: r.get("groundnews_publication_bias") for r in _bias_rows}
+        for _i, _c in enumerate(clusters, 1):
+            _w = skew_warning([(a.get("source_id"), _bias_of.get(a.get("source_id"))) for a in _c])
+            if _w:
+                print(f"  ⚠ THEME {_i} SOURCE-SKEW: {_w}")
+    except Exception as _e:
+        print(f"  (source-skew check skipped: {type(_e).__name__})")
     highlights_count = int(config.get("writer_highlights_count", 8))
     highlights_min_rel = int(config.get("writer_highlights_min_relevance", 8))
     highlights = pick_highlights(leftovers, highlights_count, highlights_min_rel)
