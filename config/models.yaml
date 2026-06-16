@@ -197,6 +197,11 @@ title_dedup_window_hours: 48           # match the deduplicator window (cluster_
 title_dedup_only_unscored: true        # only collapse copies the analyst has NOT scored yet (pre-paid stage)
 title_dedup_temperature: 0             # deterministic yes/no
 title_dedup_max_tokens: 20             # the reply is just {"same_event": true|false}
+title_dedup_bias_categories: ["geopolitics", "pakistan"]  # NF-NEW10 v2: clusters in these
+                                       #   categories ALSO keep one source per Ground-News bias side
+                                       #   (left/center/right) when present. Other topics get only the
+                                       #   temporal (earliest + most-developed) keepers. Bias axis needs
+                                       #   the source bias tags seeded (NF-D1); until then it's a no-op.
 
 # Dispatcher settings
 dispatcher_telegram_msg_limit: 3500
