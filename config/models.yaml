@@ -28,6 +28,13 @@ fetch_safety_ceiling: 3000  # 2026-06-15: raised 600 -> 3000 to match the 100/so
                             #   cut, and then RANDOMLY across all articles (never by source order). 3000
                             #   caps a tens-of-thousands runaway without throwing away normal-load context.
 
+# NF-NEW11: fetch profile switch (flip ONE key, no code edit).
+#   full  (default) = the 100/source full-day context above (max_articles_per_source / fetch_safety_ceiling).
+#   light           = the cheaper most-recent-~N profile (the old behaviour) for when full context isn't needed.
+fetch_profile: full
+fetch_light_max_per_source: 10     # most-recent N per source when fetch_profile: light
+fetch_light_safety_ceiling: 600    # tighter runaway guard for the light profile
+
 # Priority
 priority_source_types: ["vc_blog", "research", "blog"]
 priority_guaranteed: true  # 優先ソースは150件制限の外（fetcher.pyにハードコード済み）

@@ -228,6 +228,34 @@ def deduplicate_batch(articles: list) -> list:
             unique.append(a)
     return unique
 
+# --- NF-NEW11: fetch profile (full vs light) ---
+def resolve_fetch_caps(config):
+    """Pick the per-source cap + safety ceiling for the active fetch profile.
+
+      'full' (default): max_articles_per_source / fetch_safety_ceiling — today's full-day context.
+      'light':          fetch_light_max_per_source / fetch_light_safety_ceiling — the cheaper
+                        most-recent-~N profile (the old behaviour), for when full context isn't
+                        needed. Flip one config key, no code edit.
+
+    A missing/unknown/odd profile falls back to 'full', so the DEFAULT behaviour is unchanged.
+    Returns (profile, max_per_source, safety_ceiling). Pure; tolerant of a missing/broken config
+    (mirrors the caller's own config.get defaults, so a hollow config reproduces current behaviour)."""
+    def _cfg(key, default):
+        try:
+            v = config.get(key, default)
+            return default if v is None else v
+        except Exception:
+            return default
+    profile = str(_cfg("fetch_profile", "full")).strip().lower()
+    if profile == "light":
+        return ("light",
+                int(_cfg("fetch_light_max_per_source", 10)),
+                int(_cfg("fetch_light_safety_ceiling", 600)))
+    return ("full",
+            _cfg("max_articles_per_source", 10),
+            int(_cfg("fetch_safety_ceiling", 600)))
+
+
 # --- Main Fetcher ---
 def run_fetcher():
     config = load_config()
@@ -249,8 +277,8 @@ def run_fetcher():
     print(f"  Loaded {len(junk_patterns)} junk patterns")
 
     priority_types = config.get("priority_source_types", ["vc_blog", "research", "blog"])
-    max_per_source = config.get("max_articles_per_source", 10)
-    safety_ceiling = int(config.get("fetch_safety_ceiling", 600))
+    fetch_profile, max_per_source, safety_ceiling = resolve_fetch_caps(config)
+    print(f"  Fetch profile: {fetch_profile} (max/source={max_per_source}, safety ceiling={safety_ceiling})")
 
     priority_sources = [s for s in sources if s.get("source_type") in priority_types]
     news_sources = [s for s in sources if s.get("source_type") not in priority_types]
