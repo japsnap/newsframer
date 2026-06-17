@@ -97,6 +97,29 @@ def wait_for_brief(load_fn, max_wait_s, poll_s, sleep_fn=time.sleep, time_fn=tim
     return brief, why
 
 
+def _run_critic(brief_text, cfg, dry=False):
+    """NF-F1 (§10.13): pre-send quality check on the finished brief. REPORTS findings to your
+    Telegram (the alert path) grouped by severity; it NEVER patches or blocks the send. Gated by
+    critic_enabled (default off) and fully wrapped so it can never break delivery."""
+    try:
+        if not cfg.get("critic_enabled", False):
+            return
+        import critic
+        findings = critic.critique(brief_text, max_chars=None, config=cfg)
+        min_sev = cfg.get("critic_alert_min_severity", "Important")
+        if findings and critic.at_or_above(findings, min_sev):
+            report = critic.format_report(findings)
+            if dry:
+                print("  NF-F1 Critic (dry-run, not sent):\n" + report)
+            else:
+                dlv.send_alert(report)
+                print(f"  NF-F1: Critic report sent to Telegram ({len(findings)} finding(s)).")
+        else:
+            print(f"  NF-F1: Critic OK ({len(findings)} finding(s); none at/above {min_sev}).")
+    except Exception as e:
+        print(f"  NF-F1: Critic skipped (isolated): {type(e).__name__}: {e}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="print chunk plan; no send/record")
@@ -117,6 +140,9 @@ def main():
     chunks = dlv.split_for_telegram(brief[LANG_COL])
     print(f"deliver_brief: brief={brief['id']} date={brief.get('date')} "
           f"chunks={len(chunks)} article_ids={len(ids)}")
+
+    # NF-F1 (§10.13): pre-send Critic — report-only, never blocks. No-op unless critic_enabled.
+    _run_critic(brief.get(LANG_COL), _CFG, dry=args.dry_run)
 
     if args.dry_run:
         for i, c in enumerate(chunks, 1):

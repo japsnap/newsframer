@@ -109,6 +109,19 @@ def test_theme_count_excludes_highlights_and_investigations():
     ok("theme_count_empty", c.theme_count("") == 0)
 
 
+def test_at_or_above_threshold():
+    # the alert gate: only ping when a finding is at/above the configured severity
+    crit = [{"severity": c.CRITICAL, "code": "x", "message": "m"}]
+    imp = [{"severity": c.IMPORTANT, "code": "y", "message": "m"}]
+    minor = [{"severity": c.MINOR, "code": "z", "message": "m"}]
+    ok("at_crit_meets_important", c.at_or_above(crit, c.IMPORTANT) is True)
+    ok("at_important_meets_important", c.at_or_above(imp, c.IMPORTANT) is True)
+    ok("at_minor_below_important", c.at_or_above(minor, c.IMPORTANT) is False)
+    ok("at_minor_meets_minor", c.at_or_above(minor, c.MINOR) is True)
+    ok("at_empty_false", c.at_or_above([], c.IMPORTANT) is False)
+    ok("at_unknown_severity_defaults_important", c.at_or_above(minor, "Bogus") is False)
+
+
 def main():
     failed = 0
     for name, fn in sorted(globals().items()):

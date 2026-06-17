@@ -107,6 +107,13 @@ def worst_severity(findings):
     return max((f["severity"] for f in findings), key=lambda s: _ORDER[s])
 
 
+def at_or_above(findings, min_severity):
+    """True if any finding is at or above min_severity (e.g. only alert on Important+). Pure.
+    An unknown min_severity falls back to the Important floor."""
+    floor = _ORDER.get(min_severity, _ORDER[IMPORTANT])
+    return any(_ORDER.get(f.get("severity"), 0) >= floor for f in (findings or []))
+
+
 def format_report(findings):
     """Mobile-first Telegram report, grouped by severity. Empty -> a clean-pass line."""
     if not findings:

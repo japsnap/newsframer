@@ -50,6 +50,64 @@ def test_is_material_numeric():
     ok("below_both", tt.is_material_numeric(100, 101, 0.15, 5.0) is False)
     ok("abs_big", tt.is_material_numeric(100, 120, 0.15, 5.0) is True)
     ok("zero_base", tt.is_material_numeric(0, 1, 0.15, 5.0) is False)
+    # NF-C1a: abs_thresh <= 0 DISABLES the absolute bar -> percentage-only (crypto/price)
+    ok("abs_disabled_pct_clears", tt.is_material_numeric(60000, 66000, 0.10, 0) is True)   # 10%
+    ok("abs_disabled_pct_below", tt.is_material_numeric(60000, 65000, 0.10, 0) is False)   # 8.3%
+    ok("abs_disabled_tiny_wiggle", tt.is_material_numeric(60000, 60500, 0.10, 0) is False)  # 0.8%
+
+
+# --- NF-C1a: per-category materiality override + crypto 10% gating ---------
+def test_resolve_materiality():
+    cfg = {"sequencing_materiality": {"magnitude_abs": 1, "magnitude_pct": 0.15},
+           "sequencing_materiality_overrides": {"crypto": {"magnitude_pct": 0.10, "magnitude_abs": 0}}}
+    m = tt.resolve_materiality(cfg, "crypto")
+    ok("override_applied", m["magnitude_pct"] == 0.10 and m["magnitude_abs"] == 0)
+    ok("override_other_category", tt.resolve_materiality(cfg, "geopolitics")["magnitude_pct"] == 0.15)
+    ok("override_none_category", tt.resolve_materiality(cfg, None)["magnitude_pct"] == 0.15)
+    ok("override_missing_block", tt.resolve_materiality({}, "crypto") == {})
+
+
+def test_crypto_price_gating():
+    mat = {"magnitude_pct": 0.10, "magnitude_abs": 0}      # the resolved crypto bars
+    ok("crypto_10pct_material", tt.classify_delta(P("60000"), F("66000", unit="USD"), mat) is not None)
+    ok("crypto_below_10pct", tt.classify_delta(P("60000"), F("65000", unit="USD"), mat) is None)
+    ok("crypto_tiny_wiggle", tt.classify_delta(P("65000"), F("66000", unit="USD"), mat) is None)  # 1.5%
+    # the SAME move under the GLOBAL bars (abs=1) would have fired -> proves the override matters
+    ok("global_would_fire", tt.classify_delta(P("65000"), F("66000"),
+                                              {"magnitude_abs": 1, "magnitude_pct": 0.15}) is not None)
+
+
+def test_humanize():
+    ok("hum_k", tt._humanize(66000) == "66K")
+    ok("hum_k60", tt._humanize(60000) == "60K")
+    ok("hum_m", tt._humanize(1_500_000) == "1.5M")
+    ok("hum_small", tt._humanize(47) == "47")
+    ok("hum_neg", tt._humanize(-5000) == "-5K")
+
+
+def test_price_format():
+    note = tt.format_shift_note("Bitcoin", {"type": "magnitude", "old": "60000", "new": "66000",
+                                            "unit": "USD", "since": "2026-06-16T00:00:00Z"},
+                                price_units=["usd", "$"])
+    ok("price_humanized", "$60K" in note and "$66K" in note)
+    ok("price_pct", "+10%" in note)
+    ok("price_phrasing", "was $60K" in note and "now $66K" in note)
+    # a non-currency numeric note is UNCHANGED (compact arrow) — no format regression
+    arrow = tt.format_shift_note("Toll", {"type": "cumulative", "old": "12", "new": "47",
+                                          "unit": "dead", "since": "2026-06-16T00:00:00Z"})
+    ok("nonprice_arrow", "→" in arrow and "dead" in arrow and "$" not in arrow)
+
+
+def test_brief_stories_category():
+    clusters = [[{"id": "a1", "cluster_id": "c1", "title": "BTC up", "content_raw": "x", "source_id": "s1"},
+                 {"id": "a2", "cluster_id": "c1", "title": "BTC up2", "content_raw": "y", "source_id": "s2"}],
+                [{"id": "a3", "cluster_id": None, "title": "Solo", "content_raw": "z", "source_id": "s9"}]]
+    stories = tt.brief_stories(clusters, {"s1": "crypto", "s2": "crypto", "s9": "geopolitics"})
+    grp = [s for s in stories if s["has_cluster"]][0]
+    solo = [s for s in stories if not s["has_cluster"]][0]
+    ok("story_category_majority", grp["category"] == "crypto")
+    ok("story_category_single", solo["category"] == "geopolitics")
+    ok("story_category_none_without_map", tt.brief_stories(clusters)[0]["category"] is None)
 
 
 # --- classify_delta: all 7 types + guards ---------------------------------

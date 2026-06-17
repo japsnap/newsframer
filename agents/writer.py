@@ -799,6 +799,19 @@ def run_writer():
     )
     # NF-C1 (§4.4): add the deterministic "What Changed" subsection (empty when off/no deltas).
     briefing_text = seq.splice_what_changed(briefing_text, shift_section)
+    # NF-D2 (§8.2): Blindspot of the day — spliced like Investigations, fully isolated. OFF by
+    # default (blindspot_enabled=false) => brief byte-for-byte unchanged. A parse miss adds nothing.
+    if config.get("blindspot_enabled", False) and config.get("blindspot_telegram", True):
+        try:
+            import blindspot as _bsp
+            _bs_block = _bsp.build_from_config(config)
+            if _bs_block:
+                briefing_text = _bsp.splice(briefing_text, _bs_block)
+                print(f"  NF-D2: Blindspot spliced ({len(_bs_block)} chars).")
+            else:
+                print("  NF-D2: Blindspot — nothing strong today; skipped.")
+        except Exception as _be:
+            print(f"  NF-D2: Blindspot skipped (isolated): {type(_be).__name__}: {_be}")
 
     usage = getattr(response, "usage", None)
     t_in = getattr(usage, "prompt_tokens", 0) if usage else 0

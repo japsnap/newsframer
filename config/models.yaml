@@ -173,6 +173,79 @@ worldcup_reply_line: "Any questions, reply"  # closing invite; "" disables it. R
 # Which WhatsApp registry chats receive the WC brief: every delivery EXCEPT those with `worldcup: false`
 # in config/whatsapp_deliveries.yaml (gitignored). Targets/JIDs/numbers stay in that registry, never here.
 
+# --- Football news (NF-A2) — event-feed digest TEMPLATE (agents/event_feed + run_football_brief) ---
+# A self-contained RSS-headline digest sent as its OWN WhatsApp message at 11:00, isolated from the
+# main brief and the World Cup message (no LLM, no DB). WhatsApp-only (never Telegram). OFF by default
+# => the 11:00 dispatch is byte-for-byte unchanged until you set football_enabled: true. RE-USE this
+# structure for other events after the World Cup: copy this block (rename football_* -> <event>_*),
+# point the feeds at the new sources, add a maybe_send_<event>() call in run_whatsapp_brief — no
+# engine changes. The window/duration/topic are all knobs here, never hard-coded.
+football_enabled: true                  # ON 2026-06-17 (live at 11:00 JST); set false to revert instantly
+football_header: "⚽ *Football — Today's Headlines*"   # message title (WhatsApp *bold*)
+football_window_hours: 24               # only headlines published within this lookback are shown
+football_max_items: 10                  # total headlines in the message
+football_max_per_source: 3              # diversity cap per feed (so one outlet can't dominate)
+football_include_links: true            # show the clickable source URL under each headline
+football_fetch_timeout: 25              # per-feed HTTP timeout (seconds)
+football_reply_line: ""                 # optional closing invite (e.g. "Any questions, reply"); "" disables
+# Feeds (operator-tunable; verified live 2026-06-15). These mirror the DB `football` sources, which
+# stay active=false so they NEVER enter the Telegram brief — this digest is their only consumer.
+football_feeds:
+  - {name: "Guardian", url: "https://www.theguardian.com/football/rss"}
+  - {name: "BBC Sport", url: "https://feeds.bbci.co.uk/sport/football/rss.xml"}
+  - {name: "ESPN FC", url: "https://www.espn.com/espn/rss/soccer/news"}
+  - {name: "Sky Sports", url: "https://www.skysports.com/rss/11095"}
+
+# --- Blindspot of the day (NF-D2, spec §8.2) — Ground News Blindspot, scraped (no API/RSS) ---
+# ONE under-covered story/day with a one-line "which side is ignoring it" note. Channel-agnostic:
+# the SAME pick feeds the Telegram brief (spliced) and the WhatsApp 11:00 dispatch. OFF by default
+# => both channels unchanged until blindspot_enabled: true. Per-channel toggles run either alone.
+# Brittle by nature (scrapes a community site) — a parse miss simply skips the line, never crashes.
+blindspot_enabled: true                 # ON 2026-06-17 (both channels); set false to revert instantly
+blindspot_telegram: true                # include in the 06:00 Telegram brief (when enabled)
+blindspot_whatsapp: true                # include in the 11:00 WhatsApp dispatch (when enabled)
+blindspot_url: "https://ground.news/blindspot"
+blindspot_header: "🔦 *Blindspot of the Day*"
+blindspot_max_items: 1                  # max stories/day (spec §8.2: max 1)
+blindspot_min_sources: 5                # skip "thin" stories with fewer sources (spec §8.2)
+blindspot_include_link: true            # show the Ground News article link
+blindspot_fetch_timeout: 25             # HTTP timeout (seconds)
+
+# --- Critic (NF-F1 / §10.13) — pre-send quality check; REPORT-ONLY, never patches or blocks ---
+# Runs between Writer and delivery on the finished Telegram brief, checks structure + anti-
+# hallucination citations, and pings YOUR Telegram (the alert path) with a severity report. It
+# NEVER edits or blocks the send. OFF by default => delivery byte-for-byte unchanged.
+critic_enabled: true                    # ON 2026-06-18 (report-only, never blocks); false to revert
+critic_alert_min_severity: "Important"  # only ping when a finding is at/above this (Critical|Important|Minor)
+# critic_min_themes / critic_overrun_warn_ratio fall back to the writer_* values when unset.
+
+# --- Length levels (NF-E2 / §6) — per-WhatsApp-chat brief length (short / medium / long) ---
+# Each chat in config/whatsapp_deliveries.yaml may set `length: short|medium|long`; a missing one
+# uses default_length. A level overrides ONLY the brief-shape knobs it lists; anything omitted
+# falls back to the global writer_* value. `medium` is intentionally EMPTY (= today's defaults),
+# so a chat with no length (or length: medium) is byte-for-byte unchanged.
+default_length: medium
+length_levels:
+  short:
+    max_themes: 3
+    min_themes: 2
+    per_theme_chars: 1200
+    max_articles_per_theme: 3
+  medium: {}                            # = the global writer_* defaults (today's behaviour)
+  long:
+    max_themes: 8
+    per_theme_chars: 3500
+    max_articles_per_theme: 8
+    max_chars_ceiling: 22000
+
+# --- Analyst topic-weight scale (NF-NEW14 groundwork) — how a user_context.weight nudges relevance ---
+# Each interest/hypothesis in the `user_context` table carries a signed weight (e.g. +3..-3); the
+# Analyst nudges a matching article's relevance by it. This was hard-coded in the analyst prompt;
+# it's now config-driven (default reproduces the prior scale exactly). A future UI sets per-topic
+# weight (NF-NEW14). strong = the nudge for a |weight|=3 interest; mild = for a |weight|=1 interest.
+analyst_weight_strong_points: 3         # |weight|=3 => push relevance ~2-3 points (rendered (strong-1)-strong)
+analyst_weight_mild_points: 1           # |weight|=1 => push relevance ~1 point
+
 # --- Delivery ---
 telegram_message_limit: 3800       # per-message char cap (Telegram hard cap is 4096)
 deliver_wait_seconds: 240          # no-delivery fix (2026-06-14): deliver_brief waits up to this long
@@ -223,7 +296,7 @@ title_dedup_max_keep: 5                # NF-NEW10 v3: keep up to N articles per 
 # OFF BY DEFAULT: when sequencing_enabled is false the Writer never calls it and the brief is
 # byte-for-byte unchanged. State persists in the Supabase `tracked_threads` table; weekly hard
 # reset on the Monday-06:00-JST boundary (§4.2). Telegram brief only for now (WhatsApp = backlog).
-sequencing_enabled: false              # master switch (false => pipeline byte-for-byte unchanged)
+sequencing_enabled: true               # master switch (ON 2026-06-17; set false to revert instantly)
 sequencing_placement: ["subsection", "inline"]  # where notes show: 'subsection' (## What Changed)
                                        #   and/or 'inline' (woven into the matching theme). Both on.
 sequencing_model: "gemini/gemini-2.5-flash-lite"  # Stage A structured-fact extraction (cheapest)
@@ -245,6 +318,19 @@ sequencing_materiality:                # per-type bars; a change must clear ABS 
   cumulative_pct: 0.0
   forecast_abs: 1                       #   prediction vs actual divergence
   forecast_pct: 0.10
+# NF-C1a — per-category materiality overrides (config-driven; a future settings-UI writes here).
+# A story whose SOURCE CATEGORY (the bundle, §8.1) matches a key below uses THESE bars instead of
+# the global sequencing_materiality. Set only the keys you want to change; the rest fall back to
+# the global value. A category NOT listed here uses the global bars unchanged.
+#   crypto: prices are noisy, so a move counts only at >=10% (BTC must go ~60k -> 66k+, not on a
+#   1k wiggle). magnitude_abs: 0 DISABLES the absolute floor so ONLY the percentage bar applies.
+sequencing_materiality_overrides:
+  crypto:
+    magnitude_pct: 0.10                 # a price move is material only at >=10%
+    magnitude_abs: 0                    # 0 = no absolute floor -> percentage-only (kills tiny noise)
+# Units that mark a numeric fact as a PRICE -> rendered "was $X on DAY, now $Y (+p%)" and humanized
+# to K/M/B. Case-insensitive. Add currencies/symbols as needed (no code change).
+sequencing_price_units: ["usd", "$", "dollar", "dollars", "eur", "gbp", "jpy", "yen"]
 sequencing_watchlist: []               # optional named threads that always get the 30-day tail
                                        #   (autodetection covers recurring stories; this is additive)
 

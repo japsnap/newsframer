@@ -162,19 +162,45 @@ def gap_refresh():
             print(f"  [gap-refresh] {name} EXCEPTION {type(e).__name__}: {e} — continuing.")
 
 
-def generate_brief(config, sb, categories, topic_keywords):
-    """Returns (briefing_text, model_used) or (None, None) when nothing qualifies."""
+def resolve_length(config, length):
+    """Effective brief-shape knobs for a length level (short/medium/long). A level may override
+    any of: max_themes, min_themes, max_articles_per_theme, per_theme_chars, max_chars_floor,
+    max_chars_ceiling, min_relevance, relevance_floor; anything omitted falls back to the global
+    writer_* value, so 'medium' (empty) reproduces today's behaviour. Unknown/None -> default_length.
+    Pure / config-driven (no hard-coded numbers; defaults reproduce current behaviour)."""
+    levels = config.get("length_levels", {}) or {}
+    lvl = length or config.get("default_length", "medium")
+    ov = levels.get(lvl, {}) or {}
+
+    def pick(key, gkey, dflt):
+        return int(ov.get(key, config.get(gkey, dflt)))
+
+    return {
+        "level": lvl,
+        "min_rel": pick("min_relevance", "writer_min_relevance", 6),
+        "rel_floor": pick("relevance_floor", "writer_relevance_floor", 4),
+        "max_themes": pick("max_themes", "writer_max_themes", 5),
+        "min_themes": pick("min_themes", "writer_min_themes", 3),
+        "max_per_theme": pick("max_articles_per_theme", "writer_max_articles_per_theme", 6),
+        "per_theme_chars": pick("per_theme_chars", "writer_per_theme_chars", 2500),
+        "floor": pick("max_chars_floor", "writer_max_chars_floor", 6000),
+        "ceiling": pick("max_chars_ceiling", "writer_max_chars_ceiling", 16000),
+    }
+
+
+def generate_brief(config, sb, categories, topic_keywords, length=None):
+    """Returns (briefing_text, model_used, selected_ids) or (None, None, []) when nothing qualifies.
+    `length` (short/medium/long, NF-E2) selects the brief-shape knobs via resolve_length (default
+    => medium => today's behaviour)."""
     model = config.get("writer_model", "anthropic/claude-haiku-4-5")
     fallback_model = config.get("writer_fallback_model", "gemini/gemini-2.5-flash-lite")
     window_hours = int(config.get("writer_window_hours", 24))
-    min_rel = int(config.get("writer_min_relevance", 6))
-    rel_floor = int(config.get("writer_relevance_floor", 4))
-    max_themes = int(config.get("writer_max_themes", 5))
-    min_themes = int(config.get("writer_min_themes", 3))
-    max_per_theme = int(config.get("writer_max_articles_per_theme", 6))
-    per_theme_chars = int(config.get("writer_per_theme_chars", 2500))
-    floor = int(config.get("writer_max_chars_floor", 6000))
-    ceiling = int(config.get("writer_max_chars_ceiling", 16000))
+    L = resolve_length(config, length)
+    min_rel, rel_floor = L["min_rel"], L["rel_floor"]
+    max_themes, min_themes = L["max_themes"], L["min_themes"]
+    max_per_theme, per_theme_chars = L["max_per_theme"], L["per_theme_chars"]
+    floor, ceiling = L["floor"], L["ceiling"]
+    print(f"  length level: {L['level']} (max_themes={max_themes}, ~{per_theme_chars} chars/theme)")
 
     candidates, _total = load_window_scored_articles(sb, window_hours, exclude_account=None)
     r = sb.table("sources").select("id, name").execute()
@@ -320,6 +346,70 @@ def maybe_send_worldcup(reg):
             pass
 
 
+def maybe_send_football(reg):
+    """Append the Football news message to the 11:00 dispatch (NF-A2). Config-gated
+    (football_enabled, default false => no-op). Fully isolated: any failure is caught +
+    alerted and can NEVER affect the main brief or the World Cup message. Self-skips when
+    nothing is in the window (no empty send). Sends to the same chats the registry feeds
+    (group + Muda's DM), minus any with `football: false`."""
+    try:
+        cfg = load_config()
+        if not cfg.get("football_enabled", False):
+            print("  Football: disabled (football_enabled=false) — skip.")
+            return
+        import run_football_brief as fb  # event_feed + deliver only (no litellm)
+        msg = fb.build_from_config(cfg)
+        if not msg:
+            print("  Football: skip (nothing in window).")
+            return
+        confirmed, attempted = fb.deliver(msg, reg)
+        print(f"  Football: {confirmed}/{attempted} target(s) confirmed.")
+    except Exception as e:
+        print(f"  Football: skipped (isolated failure) — {type(e).__name__}: {e}")
+        try:
+            send_alert(f"⚠️ NewsFramer Football (11:00 dispatch): {type(e).__name__} — "
+                       f"football message skipped; the main WhatsApp brief is unaffected.")
+        except Exception:
+            pass
+
+
+def maybe_send_blindspot(reg):
+    """Append the Blindspot-of-the-day message to the 11:00 dispatch (NF-D2). Gated by
+    blindspot_enabled AND blindspot_whatsapp (default master-off => no-op). Fully isolated:
+    any failure is caught + alerted and can NEVER affect the main brief, World Cup, or football
+    message. Self-skips when nothing strong today. Sends to registry chats not opted out
+    (`blindspot: false`)."""
+    try:
+        cfg = load_config()
+        if not (cfg.get("blindspot_enabled", False) and cfg.get("blindspot_whatsapp", True)):
+            print("  Blindspot: disabled — skip.")
+            return
+        from agents.blindspot import build_from_config as _bs_build
+        block = _bs_build(cfg)
+        if not block:
+            print("  Blindspot: skip (nothing strong today).")
+            return
+        account = reg.get("account", "wikibot")
+        targets = [d for d in reg.get("deliveries", []) if d.get("blindspot", True) and d.get("target")]
+        confirmed = 0
+        for d in targets:
+            rc, o, e = send_whatsapp(block, account, d["target"])
+            mid = confirmed_message_id(rc, o)
+            print(f"  [Blindspot -> {d.get('name', '?')}] rc={rc} messageId={mid}")
+            if mid:
+                confirmed += 1
+            else:
+                send_alert(f"🚨 NewsFramer Blindspot: WhatsApp send FAILED for {d.get('name', '?')} (rc={rc}).")
+        print(f"  Blindspot: {confirmed}/{len(targets)} target(s) confirmed.")
+    except Exception as e:
+        print(f"  Blindspot: skipped (isolated failure) — {type(e).__name__}: {e}")
+        try:
+            send_alert(f"⚠️ NewsFramer Blindspot (11:00 dispatch): {type(e).__name__} — "
+                       f"blindspot message skipped; the main WhatsApp brief is unaffected.")
+        except Exception:
+            pass
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--send", action="store_true", help="generate, save, and post to every chat")
@@ -356,14 +446,16 @@ def main():
         gap_refresh()
 
     sb = get_supabase()
-    cache = {}  # frozenset(categories) -> (text, model)
+    default_length = config.get("default_length", "medium")
+    cache = {}  # (frozenset(categories), length) -> (text, model, ids)
     any_posted = False
     for d in deliveries:
         name, target, langs, cats = d["name"], d["target"], d["languages"], d["categories"]
-        print(f"\n=== {name} ({d.get('kind','?')}) | cats={cats} | langs={langs} | -> {target} ===")
-        key = frozenset(cats)
+        length = d.get("length", default_length)
+        print(f"\n=== {name} ({d.get('kind','?')}) | cats={cats} | langs={langs} | len={length} | -> {target} ===")
+        key = (frozenset(cats), length)
         if key not in cache:
-            cache[key] = generate_brief(config, sb, cats, topic_keywords)
+            cache[key] = generate_brief(config, sb, cats, topic_keywords, length=length)
         en, used, ids = cache[key]
         if en is None:
             print(f"  QUIET — nothing qualifies for {name}; skipping.")
@@ -398,6 +490,10 @@ def main():
     if args.send:
         print("\n=== World Cup message (appended, isolated) ===")
         maybe_send_worldcup(reg)
+        print("\n=== Football news message (appended, isolated) ===")
+        maybe_send_football(reg)
+        print("\n=== Blindspot of the day (appended, isolated) ===")
+        maybe_send_blindspot(reg)
     if not args.send:
         print("\nDRY RUN — nothing sent. Re-run with --send (or --send-saved to post the saved files).")
     return 0

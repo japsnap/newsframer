@@ -102,9 +102,14 @@ def _norm(s):
 
 
 def is_material_numeric(old_num, new_num, pct_thresh, abs_thresh):
-    """True if |new-old| clears EITHER the absolute or the relative (pct of |old|) bar. Pure."""
+    """True if |new-old| clears EITHER the absolute OR the relative (pct of |old|) bar. Pure.
+    An abs_thresh <= 0 DISABLES the absolute bar (percentage-only) — used by the crypto/price
+    override (NF-C1a) so a large number like a price counts only on a >=pct move, never on a tiny
+    absolute wiggle. A pct_thresh of 0 keeps the legacy 'any non-negative ratio' behaviour
+    (cumulative tallies clear on any real climb). All existing configs use abs_thresh=1, so their
+    behaviour is unchanged."""
     change = abs(new_num - old_num)
-    if change >= abs_thresh:
+    if abs_thresh > 0 and change >= abs_thresh:
         return True
     base = abs(old_num)
     return base > 0 and (change / base) >= pct_thresh
@@ -116,6 +121,18 @@ def _type_thresholds(materiality, dtype):
     d_pct, d_abs = defaults.get(dtype, (0.15, 1.0))
     m = materiality or {}
     return (float(m.get(f"{dtype}_pct", d_pct)), float(m.get(f"{dtype}_abs", d_abs)))
+
+
+def resolve_materiality(config, category):
+    """Global sequencing_materiality with the per-category override merged on top (config-driven,
+    NF-C1a; a future settings-UI writes the overrides). A category with no override -> the global
+    bars unchanged. Only the keys present in the override are replaced. Pure over its inputs."""
+    base = dict(config.get("sequencing_materiality", {}) or {})
+    overrides = config.get("sequencing_materiality_overrides", {}) or {}
+    ov = overrides.get(category) if category else None
+    if isinstance(ov, dict):
+        base.update(ov)
+    return base
 
 
 def _family(dtype):
@@ -181,13 +198,53 @@ def _since_label(since_iso):
         return "earlier"
 
 
-def format_shift_note(label, delta, source_link=None):
+_DEFAULT_PRICE_UNITS = ("$", "usd", "dollar", "dollars", "eur", "gbp", "jpy", "yen")
+
+
+def _is_currency(unit, price_units=None):
+    """True if `unit` marks a price (config sequencing_price_units, case-insensitive). Pure."""
+    if not unit:
+        return False
+    pool = [str(x).strip().lower() for x in (price_units or _DEFAULT_PRICE_UNITS)]
+    return str(unit).strip().lower() in pool
+
+
+def _humanize(num):
+    """66000 -> '66K', 1_500_000 -> '1.5M', 47 -> '47'. Sign-preserving, K/M/B/T. Pure."""
+    try:
+        n = float(num)
+    except (TypeError, ValueError):
+        return str(num)
+    sign = "-" if n < 0 else ""
+    a = abs(n)
+    for div, suf in ((1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if a >= div:
+            s = f"{a / div:.1f}".rstrip("0").rstrip(".")
+            return f"{sign}{s}{suf}"
+    return f"{sign}{int(a)}" if a == int(a) else f"{sign}{a:g}"
+
+
+def format_shift_note(label, delta, source_link=None, price_units=None):
     """One-line, data-to-data shift note. source_link (optional) = '[Source](url)' for the NEW fact.
-    Pure; the figures come only from the structured delta, never from prose."""
+    Pure; the figures come only from the structured delta, never from prose. A PRICE fact (numeric
+    type with a currency unit, NF-C1a) renders readably as 'was $X on DAY, now $Y (+p%)' with
+    humanized K/M figures and the percentage move; every other shape keeps the compact arrow form."""
     since = _since_label(delta.get("since"))
-    unit = (" " + delta["unit"]) if delta.get("unit") and delta["unit"] != "%" else ""
-    pct = "%" if delta.get("unit") == "%" else ""
     t = delta.get("type")
+    raw_unit = delta.get("unit")
+
+    if t in ("magnitude", "cumulative", "forecast") and _is_currency(raw_unit, price_units):
+        o, n = parse_quantity(delta.get("old")), parse_quantity(delta.get("new"))
+        if o is not None and n is not None:
+            move = ""
+            if o[0]:
+                p = round((n[0] - o[0]) / abs(o[0]) * 100)
+                move = f" ({'+' if p >= 0 else '−'}{abs(p)}%)"
+            body = f"{label}: was ${_humanize(o[0])} on {since}, now ${_humanize(n[0])}{move}"
+            return f"{body} {source_link}".rstrip() if source_link else body
+
+    unit = (" " + raw_unit) if raw_unit and raw_unit != "%" else ""
+    pct = "%" if raw_unit == "%" else ""
     if t in ("magnitude", "cumulative", "forecast"):
         body = f"{label}: {delta['old']}{pct} → {delta['new']}{pct}{unit} (since {since})"
     elif t == "reversal":
@@ -284,6 +341,16 @@ def _get_supabase():
     return get_supabase()
 
 
+def _load_categories(sb):
+    """source_id -> category map (reuse the writer's loader). Best-effort: {} on any failure so
+    sequencing degrades to the GLOBAL materiality bars and never breaks the brief (NF-C1a)."""
+    try:
+        from writer import load_source_categories
+        return load_source_categories(sb) or {}
+    except Exception:
+        return {}
+
+
 def load_active_threads(sb, week_key):
     """Active threads for the CURRENT week chain (others were reset, §4.2)."""
     r = (sb.table("tracked_threads").select("*")
@@ -301,18 +368,31 @@ def reset_stale_threads(sb, week_key):
     return len(stale)
 
 
-def brief_stories(clusters):
+def _majority_category(cats):
+    """Most common non-null category in a story's articles, or None. Pure."""
+    counts = {}
+    for c in cats:
+        if c:
+            counts[c] = counts.get(c, 0) + 1
+    return max(counts, key=counts.get) if counts else None
+
+
+def brief_stories(clusters, categories_map=None):
     """Group today's brief articles into developing-story units by dedup cluster_id. A cluster_id
     group (multi-outlet, recurring) is a story; singletons without a cluster_id are skipped for
     SEEDING but can still MATCH an existing thread by embedding. Returns list of story dicts:
-    {key, label, article_ids, texts, has_cluster}."""
+    {key, label, article_ids, texts, has_cluster, category}. `category` (the source bundle, §8.1)
+    is the most common category among the story's articles — it selects the per-category
+    materiality override (NF-C1a); None when no map is given or no category resolves."""
+    cmap = categories_map or {}
     by_cluster = {}
     singles = []
     for theme_idx, cluster in enumerate(clusters or []):
         for a in cluster:
             cid = a.get("cluster_id")
             entry = {"id": a.get("id"), "title": a.get("title") or "",
-                     "text": a.get("content_raw") or "", "theme_idx": theme_idx}
+                     "text": a.get("content_raw") or "", "theme_idx": theme_idx,
+                     "category": cmap.get(a.get("source_id"))}
             if cid:
                 by_cluster.setdefault(cid, {"theme_idx": theme_idx, "members": []})["members"].append(entry)
             else:
@@ -324,12 +404,13 @@ def brief_stories(clusters):
             "key": str(cid), "label": (members[0]["title"] or "story")[:80],
             "article_ids": [m["id"] for m in members], "texts": [m["text"] for m in members],
             "theme_idx": grp["theme_idx"], "has_cluster": True,
+            "category": _majority_category([m["category"] for m in members]),
         })
     for theme_idx, e in singles:
         stories.append({
             "key": str(e["id"]), "label": (e["title"] or "story")[:80],
             "article_ids": [e["id"]], "texts": [e["text"]], "theme_idx": theme_idx,
-            "has_cluster": False,
+            "has_cluster": False, "category": e["category"],
         })
     return stories
 
@@ -377,12 +458,13 @@ def detect_and_record(sb, config, clusters, sources_map, now_utc, apply=True, lo
     max_notes = int(config.get("sequencing_max_notes_per_brief", 5))
     traj = int(config.get("sequencing_trajectory_points", 3))
     min_conf = float(config.get("sequencing_min_confidence", 0.5))
-    materiality = config.get("sequencing_materiality", {}) or {}
+    price_units = config.get("sequencing_price_units", None)
     week_key = week_start_key(now_utc)
 
     reset_n = reset_stale_threads(sb, week_key) if apply else 0
     threads = load_active_threads(sb, week_key)
-    stories = brief_stories(clusters)
+    categories_map = _load_categories(sb)
+    stories = brief_stories(clusters, categories_map)
     all_ids = [i for s in stories for i in s["article_ids"]]
     embs = fetch_embeddings(sb, all_ids)
     log(f"  NF-C1: week {week_key} | reset {reset_n} stale | {len(threads)} active thread(s) | "
@@ -411,10 +493,12 @@ def detect_and_record(sb, config, clusters, sources_map, now_utc, apply=True, lo
             continue                                    # low-confidence extraction -> don't store or emit
         fact["as_of"] = now_utc.isoformat()
         prior = (matched.get("points") or [None])[-1] if matched else None
-        delta = classify_delta(prior, fact, materiality)
+        mat = resolve_materiality(config, story.get("category"))
+        delta = classify_delta(prior, fact, mat)
         if delta:
             link = _source_link(story, sources_map, sb)
-            line = format_shift_note(_clean_label((matched or {}).get("label") or story["label"]), delta, link)
+            line = format_shift_note(_clean_label((matched or {}).get("label") or story["label"]),
+                                     delta, link, price_units)
             notes.append({"theme_idx": story["theme_idx"], "line": line,
                           "old_ids": delta.get("old_ids", []), "new_ids": delta.get("new_ids", [])})
             log(f"  NF-C1 DELTA [{delta['type']}] {line}")
@@ -496,10 +580,11 @@ def _simulate(days=7):
     config = load_config()
     sb = get_supabase()
     model = config.get("sequencing_model", "gemini/gemini-2.5-flash-lite")
-    materiality = config.get("sequencing_materiality", {}) or {}
     traj = int(config.get("sequencing_trajectory_points", 3))
     sim = float(config.get("sequencing_match_similarity", 0.83))
     min_conf = float(config.get("sequencing_min_confidence", 0.5))
+    price_units = config.get("sequencing_price_units", None)
+    categories_map = _load_categories(sb)
 
     r = (sb.table("briefings").select("id, date, created_at, article_ids")
          .order("created_at", desc=True).limit(days).execute())
@@ -515,7 +600,7 @@ def _simulate(days=7):
         clusters = _fake_clusters(arts)
         now = _parse_ts(b.get("created_at"))
         embs = fetch_embeddings(sb, [a["id"] for a in arts])
-        stories = brief_stories(clusters)
+        stories = brief_stories(clusters, categories_map)
         day_deltas = 0
         for story in stories:
             if not story["has_cluster"]:
@@ -536,12 +621,14 @@ def _simulate(days=7):
                 continue
             fact["as_of"] = now.isoformat()
             prior = (matched.get("points") if matched else None) or [None]
-            delta = classify_delta(prior[-1], fact, materiality)
+            mat = resolve_materiality(config, story.get("category"))
+            delta = classify_delta(prior[-1], fact, mat)
             if delta:
                 day_deltas += 1
                 lbl = _clean_label((matched or {}).get("label") or story["label"])
-                type_examples.setdefault(delta["type"], format_shift_note(lbl, delta))
-                print(f"  [{b['date']}] DELTA [{delta['type']}] {format_shift_note(lbl, delta)}")
+                note = format_shift_note(lbl, delta, price_units=price_units)
+                type_examples.setdefault(delta["type"], note)
+                print(f"  [{b['date']}] DELTA [{delta['type']}] {note}")
                 print(f"            old_ids={delta.get('old_ids')}  new_ids={delta.get('new_ids')}")
             if matched:
                 matched["points"] = cap_points(matched["points"] + [point_of(fact)], traj)

@@ -141,6 +141,30 @@ def load_articles_to_analyze(sb, cap, window_hours):
     return fresh
 
 
+def weight_interpretation_text(strong_points=3, mild_points=1):
+    """The WEIGHT INTERPRETATION guidance, GENERATED from the config scale (NF-NEW14) so a future
+    UI / config can tune how hard a topic weight nudges relevance — no longer hard-coded. Defaults
+    reproduce the prior text byte-for-byte. Pure. `strong_points` = the nudge for a |weight|=3
+    interest (rendered as a (strong-1)-strong range); `mild_points` = the nudge for a |weight|=1
+    interest. The weight LABELS (+3/+1/-1/-3) stay fixed — they are the user_context.weight scale;
+    only the relevance-POINTS they map to are tunable."""
+    hi = int(strong_points)
+    lo = max(1, hi - 1)
+    rng = f"{lo}-{hi}" if lo != hi else f"{hi}"
+    mid = int(mild_points)
+    return (
+        "WEIGHT INTERPRETATION: For each article, identify which interests it matches. "
+        "Apply weight as a relevance adjustment after your initial scoring: "
+        f"+3 = significantly more relevant (push up ~{rng} points). "
+        f"+1 = mildly more relevant (push up ~{mid} point). "
+        "0 = no adjustment. "
+        f"-1 = mildly less relevant (push down ~{mid} point). "
+        f"-3 = significantly less relevant (push down ~{rng} points). "
+        "Final relevance_score must still respect the 0-10 calibration rule. "
+        "Negative-weight topics should NOT be filtered out — still score them honestly, just lower."
+    )
+
+
 def build_context_block(context):
     """Build the prompt section listing user interests + active hypotheses."""
     interests = context.get("interests", [])
@@ -157,17 +181,9 @@ def build_context_block(context):
             w_str = f"{w:+d}" if isinstance(w, int) else "0"
             lines.append(f"- topic='{it.get('topic','')}' weight={w_str}")
         lines.append("")
-        lines.append(
-            "WEIGHT INTERPRETATION: For each article, identify which interests it matches. "
-            "Apply weight as a relevance adjustment after your initial scoring: "
-            "+3 = significantly more relevant (push up ~2-3 points). "
-            "+1 = mildly more relevant (push up ~1 point). "
-            "0 = no adjustment. "
-            "-1 = mildly less relevant (push down ~1 point). "
-            "-3 = significantly less relevant (push down ~2-3 points). "
-            "Final relevance_score must still respect the 0-10 calibration rule. "
-            "Negative-weight topics should NOT be filtered out — still score them honestly, just lower."
-        )
+        lines.append(weight_interpretation_text(
+            _CFG.get("analyst_weight_strong_points", 3),
+            _CFG.get("analyst_weight_mild_points", 1)))
 
     lines.append("")
 
