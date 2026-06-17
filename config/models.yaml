@@ -246,6 +246,12 @@ length_levels:
 analyst_weight_strong_points: 3         # |weight|=3 => push relevance ~2-3 points (rendered (strong-1)-strong)
 analyst_weight_mild_points: 1           # |weight|=1 => push relevance ~1 point
 
+# --- Execution log (NF-14 / spec §9) — per-run observability + cost trace into the execution_log table ---
+# run_brief mints a trace_id (NEWSFRAMER_TRACE_ID) shared by a run's engines; agents/run_log mirrors each
+# agent_runs row into execution_log, best-effort + fully isolated (NEVER in the critical path). Additive —
+# agent_runs is untouched. false => skip the mirror entirely (agent_runs-only, as before).
+exec_log_enabled: true
+
 # --- Delivery ---
 telegram_message_limit: 3800       # per-message char cap (Telegram hard cap is 4096)
 deliver_wait_seconds: 240          # no-delivery fix (2026-06-14): deliver_brief waits up to this long

@@ -6,9 +6,11 @@ This is run_pipeline.py minus the dispatcher step. It WRAPS the existing engines
 and invokes them unchanged; it does not import or reimplement any engine logic.
 Invoked by the OpenClaw `newsframer-deliver-brief` skill via the project venv.
 """
+import os
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -57,7 +59,12 @@ def run_agent(name, cmd):
 
 
 def main():
-    print(f"=== NewsFramer brief build start {datetime.utcnow().isoformat()} (no dispatcher) ===")
+    # NF-14: one trace_id ties this run's engine rows together in execution_log. Each engine is a
+    # subprocess and inherits it via the environment; run_log mirrors it best-effort (never blocking).
+    trace_id = uuid.uuid4().hex
+    os.environ["NEWSFRAMER_TRACE_ID"] = trace_id
+    os.environ.setdefault("NEWSFRAMER_TASK_TYPE", "brief")
+    print(f"=== NewsFramer brief build start {datetime.utcnow().isoformat()} (no dispatcher) | trace={trace_id} ===")
     any_failed = False
     for name, cmd in AGENTS:
         if not run_agent(name, cmd):

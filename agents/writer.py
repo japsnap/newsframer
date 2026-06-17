@@ -862,6 +862,7 @@ def run_writer():
 
     record_run(sb, {
         "agent_name": "writer",
+        "artifact_verified": bool(briefing_id),  # NF-14: the brief artifact (briefings row) exists
         "model_used": used_model,
         "tokens_in": t_in,
         "tokens_out": t_out,

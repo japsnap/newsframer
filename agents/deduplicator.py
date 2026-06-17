@@ -343,7 +343,8 @@ def run_deduplicator(apply_changes):
         }).eq("id", loser["id"]).execute()
 
     duration_ms = int((time.time() - start) * 1000)
-    sb.table("agent_runs").insert({
+    from run_log import record_run  # NF-14: route through the shared logger (agent_runs + execution_log mirror)
+    record_run(sb, {
         "agent_name": "deduplicator",
         "model_used": model,
         "tokens_in": 0,
@@ -351,7 +352,7 @@ def run_deduplicator(apply_changes):
         "cost_usd": 0.0,
         "duration_ms": duration_ms,
         "status": "success",
-    }).execute()
+    })
 
     print(f"\nDone. {len(to_delete)} articles soft-deleted, {len(cluster_updates)} cluster_id values set.")
     print(f"Time: {duration_ms}ms")
