@@ -458,6 +458,22 @@ def maybe_send_blindspot(reg):
             pass
 
 
+def maybe_send_cost_report(reg):
+    """After the WhatsApp dispatch reaches the group + Muda, send the OPERATOR (Telegram) a cost
+    rollup for the whole day — the Telegram brief + every WhatsApp chat. Gated by
+    cost_report_enabled; fully isolated. The chat list is read from the registry (dynamic — never
+    hard-coded to a fixed number of groups), so adding chats later is automatic."""
+    try:
+        cfg = load_config()
+        if not cfg.get("cost_report_enabled", False):
+            return
+        from agents.cost_report import build_and_send
+        build_and_send(get_supabase(), reg, cfg, send_alert)
+        print("  Cost report sent to the operator's Telegram.")
+    except Exception as e:
+        print(f"  Cost report skipped (isolated): {type(e).__name__}: {e}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--send", action="store_true", help="generate, save, and post to every chat")
@@ -545,6 +561,8 @@ def main():
         maybe_send_football(reg)
         print("\n=== Blindspot of the day (appended, isolated) ===")
         maybe_send_blindspot(reg)
+        print("\n=== Cost report (after the dispatch reached the group + Muda) ===")
+        maybe_send_cost_report(reg)
     if not args.send:
         print("\nDRY RUN — nothing sent. Re-run with --send (or --send-saved to post the saved files).")
     return 0
