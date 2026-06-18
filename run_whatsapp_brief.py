@@ -18,15 +18,17 @@ import sys
 import json
 import argparse
 import subprocess
+import uuid
 
 import yaml
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from agents.writer import (  # noqa: E402  (reuse, do not modify writer.py)
     load_config, get_supabase, load_window_scored_articles, cluster_by_topic_overlap,
-    pick_highlights, build_user_prompt, load_prompt_files, JST,
+    pick_highlights, build_user_prompt, load_prompt_files, estimate_cost, JST,
 )
 from agents.deliver import record_delivered, send_alert  # noqa: E402  (§4.3 confirmed-send recording)
+from agents.run_log import record_run  # noqa: E402  (NF-14: track WhatsApp-path LLM cost)
 from agents.char_monitor import overrun_flag  # noqa: E402  (NF-F2: over-cap quality flag)
 from agents.window_audit import window_span_report  # noqa: E402  (NF-NEW2: provable 24h window)
 from litellm import completion  # noqa: E402
@@ -165,11 +167,44 @@ def gap_refresh():
     for name, cmd in stages:
         try:
             print(f"  [gap-refresh] {name} ...")
-            r = subprocess.run(cmd, cwd=base, timeout=1800)
+            r = subprocess.run(cmd, cwd=base, timeout=int(load_config().get("whatsapp_gap_stage_timeout_seconds", 1800)))
             if r.returncode != 0:
                 print(f"  [gap-refresh] {name} exit {r.returncode} — continuing (brief uses existing scores).")
         except Exception as e:
             print(f"  [gap-refresh] {name} EXCEPTION {type(e).__name__}: {e} — continuing.")
+
+
+def _usage_tokens(resp):
+    """(prompt_tokens, completion_tokens) from an LLM response, (0, 0) if absent. Pure."""
+    usage = getattr(resp, "usage", None)
+    if not usage:
+        return (0, 0)
+    return (getattr(usage, "prompt_tokens", 0) or 0, getattr(usage, "completion_tokens", 0) or 0)
+
+
+def _record_llm_cost(sb, config, agent_name, model, resp, status="success"):
+    """NF-14: log a WhatsApp-path LLM call's real cost to agent_runs + execution_log, so the
+    group/Muda generation + translation are no longer invisible. Best-effort via record_run;
+    main's trace_id ties them to the run. Returns the cost (USD)."""
+    t_in, t_out = _usage_tokens(resp)
+    cost = estimate_cost(config, model, t_in, t_out)
+    record_run(sb, {"agent_name": agent_name, "model_used": model, "tokens_in": t_in,
+                    "tokens_out": t_out, "cost_usd": round(cost, 6), "status": status})
+    return cost
+
+
+def _send_timeout():
+    """Per-message gateway send timeout (config-driven; cached). Default 120s."""
+    global _SEND_TIMEOUT
+    if _SEND_TIMEOUT is None:
+        try:
+            _SEND_TIMEOUT = int(load_config().get("whatsapp_send_timeout_seconds", 120))
+        except Exception:
+            _SEND_TIMEOUT = 120
+    return _SEND_TIMEOUT
+
+
+_SEND_TIMEOUT = None
 
 
 def resolve_length(config, length):
@@ -287,10 +322,11 @@ def generate_brief(config, sb, categories, topic_keywords, length=None):
     _overrun = overrun_flag(len(text), max_chars, config.get("writer_char_overrun_warn_ratio", 1.0))
     if _overrun:
         print(f"  {_overrun}")
+    _record_llm_cost(sb, config, "whatsapp_writer", used, resp)  # NF-14: track the group/DM gen cost
     return text, used, selected_ids
 
 
-def translate(config, text, lang, translate_model):
+def translate(config, text, lang, translate_model, sb=None):
     label = LANG_LABELS.get(lang, lang)
     fallback = config.get("writer_model", "anthropic/claude-haiku-4-5")
     sys_p = (
@@ -307,13 +343,15 @@ def translate(config, text, lang, translate_model):
         print(f"  translate {translate_model} failed ({e}); falling back to {fallback}")
         used = fallback
         resp = completion(model=used, messages=msgs, temperature=float(config.get("whatsapp_translate_temperature", 0.2)), max_tokens=int(config.get("whatsapp_translate_max_tokens", 6000)))
+    if sb is not None:
+        _record_llm_cost(sb, config, "whatsapp_translate", used, resp)  # NF-14: track translation cost
     return resp.choices[0].message.content.strip(), used
 
 
 def send_whatsapp(text, account, target):
     cmd = ["node", OPENCLAW_MJS, "message", "send", "--channel", "whatsapp",
            "--account", account, "--target", target, "--message", text, "--json"]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=_send_timeout())
     return r.returncode, (r.stdout or "")[-400:], (r.stderr or "")[-200:]
 
 
@@ -427,6 +465,9 @@ def main():
     args = ap.parse_args()
 
     config = load_config()
+    # NF-14: one trace_id ties this WhatsApp run's gap-refresh engines + LLM calls together in execution_log.
+    os.environ["NEWSFRAMER_TRACE_ID"] = uuid.uuid4().hex
+    os.environ["NEWSFRAMER_TASK_TYPE"] = "whatsapp_brief"
     reg = load_registry()
     account = reg.get("account", "wikibot")
     translate_model = reg.get("translate_model", config.get("whatsapp_translate_model", "gemini/gemini-2.5-flash-lite"))
@@ -475,7 +516,7 @@ def main():
         chat_ok = True  # did EVERY send for this chat confirm a messageId?
         for i, lang in enumerate(langs):
             base = en_full if i == 0 else en_strip
-            text = base if lang == "en" else translate(config, base, lang, translate_model)[0]
+            text = base if lang == "en" else translate(config, base, lang, translate_model, sb)[0]
             with open(out_file(name, lang), "w", encoding="utf-8") as f:
                 f.write(text)
             print(f"  [{name}/{lang}] {len(text)} chars -> {out_file(name, lang)}")
