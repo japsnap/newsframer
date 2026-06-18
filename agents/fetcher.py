@@ -58,11 +58,21 @@ def get_cutoff_time(config, is_first_run=False):
     return datetime.now(timezone.utc) - timedelta(hours=hours)
 
 def source_window_hours(config, source, is_first_run):
-    """§8.1: each source uses its OWN fetch_window_hours; fall back to the global default."""
+    """§8.1: each source uses its OWN fetch_window_hours; fall back to the global default.
+    NF-4 (§4.1 incremental fetch): the 11:00 gap-refresh sets NEWSFRAMER_MAX_FETCH_WINDOW_HOURS to
+    the gap since the 06:00 slot, which CAPS the window here — so the second slot fetches only the
+    new ~5-6h of content instead of re-pulling the full day. Unset (the 06:00 run, a separate
+    process) => the full per-source window, unchanged."""
     default_h = config.get("first_run_hours_back", 48) if is_first_run else config.get("fetch_hours_back", 24)
     win = source.get("fetch_window_hours") or default_h
     if is_first_run:
         win = max(win, config.get("first_run_hours_back", 48))
+    cap = os.environ.get("NEWSFRAMER_MAX_FETCH_WINDOW_HOURS")
+    if cap:
+        try:
+            win = min(win, int(cap))
+        except (TypeError, ValueError):
+            pass
     return win
 
 def is_scrape_source(source):

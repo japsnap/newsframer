@@ -36,6 +36,19 @@ def test_source_window_first_run_floor():
     ok("first_run_no_source", f.source_window_hours(CFG, {}, True) == 48)
 
 
+def test_source_window_gap_cap():
+    # NF-4 (§4.1): the 11:00 gap-refresh caps the fetch window via env to the gap since 06:00,
+    # so the second slot fetches only the new ~5-6h instead of re-pulling the full day.
+    os.environ["NEWSFRAMER_MAX_FETCH_WINDOW_HOURS"] = "6"
+    try:
+        ok("cap_shrinks_big_window", f.source_window_hours(CFG, {"fetch_window_hours": 72}, False) == 6)
+        ok("cap_shrinks_default", f.source_window_hours(CFG, {}, False) == 6)
+        ok("cap_keeps_smaller", f.source_window_hours(CFG, {"fetch_window_hours": 4}, False) == 4)
+    finally:
+        del os.environ["NEWSFRAMER_MAX_FETCH_WINDOW_HOURS"]
+    ok("no_cap_when_unset", f.source_window_hours(CFG, {"fetch_window_hours": 72}, False) == 72)
+
+
 # --- is_scrape_source (RSS vs scrape routing) -----------------------------
 def test_is_scrape_source():
     ok("rss_is_not_scrape", f.is_scrape_source({"has_rss": True, "rss_url": "http://x/feed"}) is False)

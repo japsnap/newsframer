@@ -139,6 +139,16 @@ def gap_refresh():
     still builds from whatever is already scored (a refresh problem can never block it)."""
     base = os.path.dirname(os.path.abspath(__file__))
     py = sys.executable
+    # NF-4 (§4.1): the second slot FETCHES only the gap since 06:00, not the full per-source window.
+    # This env caps the fetcher's window (fetcher.source_window_hours); the 06:00 run_brief is a
+    # separate process and is unaffected. 0/null => no cap (old full re-pull).
+    try:
+        gap_h = int(load_config().get("whatsapp_gap_fetch_hours", 6) or 0)
+    except Exception:
+        gap_h = 6
+    if gap_h > 0:
+        os.environ["NEWSFRAMER_MAX_FETCH_WINDOW_HOURS"] = str(gap_h)
+        print(f"  [gap-refresh] fetch window capped to {gap_h}h (the gap since 06:00, §4.1)")
     stages = [
         ("fetcher",      [py, os.path.join(base, "agents", "fetcher.py")]),
         ("classifier",   [py, os.path.join(base, "agents", "classifier.py")]),

@@ -68,6 +68,10 @@ analyst_window_hours: 30
 whatsapp_gap_refresh: true     # at the 11:00 slot, refresh the pool (fetch->classify->dedup->analyst
                                #   on the gap since 06:00) BEFORE building, so the WhatsApp brief sees
                                #   06:00-11:00 news. false = old behaviour (no intraday fetch). --send only.
+whatsapp_gap_fetch_hours: 6    # NF-4 (§4.1): the gap-refresh FETCH pulls only this many hours (the gap
+                               #   since 06:00), NOT each source's full window — so the 2nd slot re-pulls
+                               #   nothing. 0/null = no cap (old full re-pull). Classify/analyse stay
+                               #   incremental (only new articles); the brief still reads the full 24h pool.
 whatsapp_fresh_hours: 6        # an article published within this many hours counts as "fresh" and
                                #   qualifies at the relevance FLOOR (not the higher day threshold), so a
                                #   genuinely new story surfaces even if borderline (NF-C2 weight-fresh-higher).
