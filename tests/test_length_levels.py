@@ -1,7 +1,7 @@
 """
-Tests for run_whatsapp_brief.resolve_length (NF-E2 / §6) — per-chat brief length levels.
-Pure config resolution: a level overrides only the knobs it lists; the rest fall back to the
-global writer_* values, and 'medium' (empty) reproduces today's behaviour.
+Tests for run_whatsapp_brief.resolve_length (item 3, 2026-06-22) — the consolidated length model.
+A chat's `length` (short/medium/long, or None) maps onto the ONE size model (short=S / medium=M /
+long=L) driving the per-theme SIZE only; theme counts come from the global writer_* values.
 
     venv\\Scripts\\python.exe tests\\test_length_levels.py
 """
@@ -21,56 +21,53 @@ def ok(name, cond):
 
 
 CFG = {
-    "writer_max_themes": 5, "writer_min_themes": 3, "writer_per_theme_chars": 2500,
-    "writer_max_articles_per_theme": 6, "writer_max_chars_floor": 6000, "writer_max_chars_ceiling": 16000,
-    "writer_min_relevance": 6, "writer_relevance_floor": 4,
+    "theme_size_levels": {"S": 1000, "M": 2000, "L": 4000},
+    "length_to_size": {"short": "S", "medium": "M", "long": "L"},
     "default_length": "medium",
-    "length_levels": {
-        "short": {"max_themes": 3, "min_themes": 2, "per_theme_chars": 1200, "max_articles_per_theme": 3},
-        "medium": {},
-        "long": {"max_themes": 8, "per_theme_chars": 3500, "max_articles_per_theme": 8, "max_chars_ceiling": 22000},
-    },
+    "writer_max_themes": 5, "writer_min_themes": 3, "writer_max_articles_per_theme": 6,
+    "writer_min_relevance": 6, "writer_relevance_floor": 4,
+    "surfaces": {"whatsapp": {"theme_size": "M"}},
 }
 
 
-def test_medium_equals_globals():
-    L = w.resolve_length(CFG, "medium")
-    ok("med_themes", L["max_themes"] == 5)
-    ok("med_chars", L["per_theme_chars"] == 2500)
-    ok("med_ceiling", L["ceiling"] == 16000)
-    ok("med_per_theme", L["max_per_theme"] == 6)
-
-
-def test_short_overrides_with_fallback():
-    L = w.resolve_length(CFG, "short")
-    ok("short_themes", L["max_themes"] == 3)
-    ok("short_chars", L["per_theme_chars"] == 1200)
-    ok("short_min_themes", L["min_themes"] == 2)
-    ok("short_per_theme", L["max_per_theme"] == 3)
-    ok("short_ceiling_fallback", L["ceiling"] == 16000)   # not overridden -> global
-
-
-def test_long_overrides():
-    L = w.resolve_length(CFG, "long")
-    ok("long_themes", L["max_themes"] == 8)
-    ok("long_chars", L["per_theme_chars"] == 3500)
-    ok("long_ceiling", L["ceiling"] == 22000)
-
-
-def test_none_uses_default():
+def test_none_uses_surface_default():
     L = w.resolve_length(CFG, None)
-    ok("none_default_themes", L["max_themes"] == 5)
-    ok("none_default_label", L["level"] == "medium")
+    ok("none_size_M", L["size"] == "M")
+    ok("none_target_2000", L["per_theme_target"] == 2000)
+    ok("none_themes_global", L["max_themes"] == 5)
 
 
-def test_unknown_level_falls_back_to_globals():
-    L = w.resolve_length(CFG, "bogus")
-    ok("unknown_globals", L["max_themes"] == 5 and L["per_theme_chars"] == 2500)
+def test_medium_maps_to_M():
+    L = w.resolve_length(CFG, "medium")
+    ok("med_size_M", L["size"] == "M")
+    ok("med_target_2000", L["per_theme_target"] == 2000)
 
 
-def test_missing_levels_block_uses_globals():
-    cfg2 = {k: v for k, v in CFG.items() if k != "length_levels"}
-    ok("no_block_globals", w.resolve_length(cfg2, "short")["max_themes"] == 5)
+def test_short_maps_to_S():
+    L = w.resolve_length(CFG, "short")
+    ok("short_size_S", L["size"] == "S")
+    ok("short_target_1000", L["per_theme_target"] == 1000)
+    ok("short_themes_still_global", L["max_themes"] == 5)   # length no longer overrides theme count
+
+
+def test_long_maps_to_L():
+    L = w.resolve_length(CFG, "long")
+    ok("long_size_L", L["size"] == "L")
+    ok("long_target_4000_is_2x", L["per_theme_target"] == 4000)
+
+
+def test_relevance_unchanged_across_lengths():
+    for lvl in (None, "short", "long"):
+        L = w.resolve_length(CFG, lvl)
+        ok(f"rel_min_{lvl}", L["min_rel"] == 6)
+        ok(f"rel_floor_{lvl}", L["rel_floor"] == 4)
+
+
+def test_surface_theme_size_when_no_length():
+    cfg2 = dict(CFG)
+    cfg2["surfaces"] = {"whatsapp": {"theme_size": "L"}}
+    L = w.resolve_length(cfg2, None)
+    ok("surface_L_no_length", L["size"] == "L" and L["per_theme_target"] == 4000)
 
 
 def main():

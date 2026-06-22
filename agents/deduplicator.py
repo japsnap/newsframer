@@ -29,6 +29,8 @@ from litellm import embedding as litellm_embedding
 from supabase import create_client
 from dotenv import load_dotenv
 
+from llm_client import embed_bounded  # 2026-06-22: hard-bound embeddings (Gemini-outage resilience)
+
 load_dotenv()
 
 # Windows cp1252 consoles crash printing non-Latin titles (global feeds) — make stdout
@@ -109,23 +111,37 @@ def generate_embeddings_for_missing(sb, articles, model):
         print(f"  All {len(articles)} articles already have embeddings.")
         return articles
 
-    print(f"  Generating embeddings for {len(missing)} articles (model: {model})...")
     config = load_config()
     dimensions = int(config.get("deduplicator_embedding_dimensions", 768))
+    # 2026-06-22: hard-bound each embedding call; after N CONSECUTIVE failures (provider
+    # unreachable) STOP — there is no Anthropic embedding to fall back to, so the deduplicator
+    # skips clustering for this run and the brief still builds (clustering just degrades), instead
+    # of hanging the whole pipeline on a dead Gemini connection.
+    timeout_s = float(config.get("llm_request_timeout_seconds", 60))
+    breaker = int(config.get("deduplicator_embedding_breaker_threshold", 3))
+    print(f"  Generating embeddings for {len(missing)} articles (model: {model}, timeout {int(timeout_s)}s)...")
+    consec = 0
     for i, a in enumerate(missing, 1):
         text = build_text_for_embedding(a)
         if not text:
             continue
         try:
-            response = litellm_embedding(model=model, input=[text], dimensions=dimensions)
+            response = embed_bounded(litellm_embedding, model, [text], timeout_s, dimensions=dimensions)
             vec = response["data"][0]["embedding"]
             sb.table("raw_articles").update({"embedding": vec}).eq("id", a["id"]).execute()
             a["embedding"] = vec
+            consec = 0
             if i % 25 == 0 or i == len(missing):
                 print(f"    [{i}/{len(missing)}] embedded")
         except Exception as e:
-            print(f"    [{i}/{len(missing)}] FAILED for {a['id']}: {e}")
+            consec += 1
+            print(f"    [{i}/{len(missing)}] FAILED for {a['id']}: {type(e).__name__}: {e}")
             a["embedding"] = None
+            if consec >= breaker:
+                print(f"    EMBEDDING PROVIDER UNREACHABLE ({consec} consecutive failures) — skipping "
+                      f"the remaining {len(missing) - i} embedding(s); dedup degrades to no clustering "
+                      f"this run (the brief still builds).")
+                break
 
     return articles
 

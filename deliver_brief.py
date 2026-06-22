@@ -30,6 +30,7 @@ BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 sys.path.insert(0, str(BASE_DIR / "agents"))
 import deliver as dlv  # noqa: E402
+import surface_render as srf  # noqa: E402  (2026-06-19: per-surface Telegram render — item 2)
 from brief_select import pick_best_brief  # noqa: E402  (NF-F4: deliver today's most-complete brief)
 
 JST = timezone(timedelta(hours=9))  # NF-F4: briefs are dated in JST; select on the JST day
@@ -138,6 +139,14 @@ def main():
 
     ids = brief.get("article_ids") or []
     chunks = dlv.split_for_telegram(brief[LANG_COL])
+    # item 2 (2026-06-19): render each chunk to clean Telegram markdown — clickable SOURCE name,
+    # NO visible URL, headings->bold — so the gateway emits valid HTML instead of falling back to
+    # plain text (where a link flattens to 'Source (URL)'). Split FIRST (on '##'), then render, so
+    # chunking is unaffected. Wrapped: a render hiccup degrades to the canonical chunk, never blocks.
+    try:
+        chunks = [srf.render_for_telegram(c, _CFG) for c in chunks]
+    except Exception as _re:
+        print(f"  (telegram render skipped, sending canonical: {type(_re).__name__}: {_re})")
     print(f"deliver_brief: brief={brief['id']} date={brief.get('date')} "
           f"chunks={len(chunks)} article_ids={len(ids)}")
 

@@ -36,6 +36,7 @@ from link_monitor import bare_url_flag  # noqa: E402  (NF-NEW1: bare-URL quality
 from window_audit import window_span_report  # noqa: E402  (NF-NEW2: provable 24h window)
 import thread_tracker as seq  # noqa: E402  (NF-C1 §4.4 sequencing; only invoked when enabled)
 from source_skew import skew_warning, coverage_note  # noqa: E402  (NF-D3 skew flag + NF-NEW10c one-sided note)
+import surface_render as srf  # noqa: E402  (2026-06-19: per-surface size + highlight dedup)
 
 load_dotenv()
 
@@ -121,7 +122,7 @@ def load_window_scored_articles(sb, window_hours, exclude_account=None):
     while True:
         r = (
             sb.table("raw_articles")
-            .select("id, source_id, title, url, content_raw, published_at")
+            .select("id, source_id, title, url, content_raw, published_at, cluster_id")
             .gte("published_at", cutoff)
             .is_("deleted_at", "null")
             .order("published_at", desc=True)
@@ -350,9 +351,23 @@ def build_highlights_block(highlights, sources_map):
     return "\n".join(lines)
 
 
+def _per_theme_target_line(per_theme_target, chars_per_paragraph=1000):
+    """item 1 (2026-06-22): the per-theme DEPTH instruction. Expressed as a scaled PARAGRAPH count
+    (which the model follows far more reliably than a raw char target) PLUS the char target, so the
+    size level visibly drives length (M~3 paragraphs, L~6 = ~2x). Empty when no target -> prompt
+    unchanged. chars_per_paragraph is config-injectable so the paragraph<->char mapping isn't baked in."""
+    if not per_theme_target:
+        return ""
+    t = int(per_theme_target)
+    paras = max(1, round(t / max(1, int(chars_per_paragraph))))
+    return (f"- Per-theme DEPTH: write each theme section as {paras} paragraph(s) of multi-source "
+            f"synthesis, 3-5 sentences each (about ~{t} characters total). Match this depth — neither "
+            f"much shorter nor much longer; scale the number of paragraphs to the count given.\n")
+
+
 def build_user_prompt(clusters, highlights, sources_map, by_hypothesis_id, context,
                      total_in_window, relevant_count, briefing_date, max_chars, coverage_notes=None,
-                     shift_notes=None):
+                     shift_notes=None, per_theme_target=None, chars_per_paragraph=1000):
     context_block = build_context_block(context)
     articles_block = build_articles_block(clusters, sources_map, by_hypothesis_id, coverage_notes)
     highlights_block = build_highlights_block(highlights, sources_map)
@@ -367,6 +382,7 @@ def build_user_prompt(clusters, highlights, sources_map, by_hypothesis_id, conte
         f"- Articles total in window: {total_in_window}\n"
         f"- Articles meeting relevance cutoff: {relevant_count}\n"
         f"- Hard character limit: {max_chars}\n"
+        f"{_per_theme_target_line(per_theme_target, chars_per_paragraph)}"
         f"- Footer must use these exact numbers in this format:\n"
         f"  ---\n"
         f"  _Briefing generated from {total_in_window} articles. {relevant_count} made the relevance cutoff. {theme_count} themes, {highlight_count} highlights._\n"
@@ -582,9 +598,11 @@ def run_writer():
     max_per_theme = int(config.get("writer_max_articles_per_theme", 6))
     window_hours = int(config.get("writer_window_hours", 24))
     # Fix 2: char cap scales with the number of themes (computed after clustering, below).
-    per_theme_chars = int(config.get("writer_per_theme_chars", 2500))
-    max_chars_floor = int(config.get("writer_max_chars_floor", 6000))
-    max_chars_ceiling = int(config.get("writer_max_chars_ceiling", 16000))
+    # item 1/2 (2026-06-22): per-theme SIZE is ONE control -> an absolute per-theme char TARGET that
+    # the writer is told to WRITE each theme to; the total cap is DERIVED after clustering.
+    _size_level = srf.resolve_size_level(config, "telegram")
+    per_theme_goal = srf.per_theme_target(config, _size_level)
+    per_highlight_chars = int(config.get("writer_per_highlight_chars", 250))
     # Per-bundle theme floors (spec §8.1/§8.6) — Telegram brief only. Guarantee each active
     # bundle a floor of themes, cap any single bundle, scale total with active-bundle count.
     bundle_floors = config.get("bundle_theme_floors") or {
@@ -602,7 +620,7 @@ def run_writer():
     print(f"  Window:         {window_hours}h")
     print(f"  Min relevance:  {min_rel} (floor {rel_floor})")
     print(f"  Themes:         min {min_themes}, per-bundle floors (cap {bundle_cap}, x{theme_multiplier}, max {theme_total_max})")
-    print(f"  Char budget:    {per_theme_chars}/theme (floor {max_chars_floor}, ceiling {max_chars_ceiling})")
+    print(f"  Per-theme size: {_size_level} -> ~{per_theme_goal} chars/theme target")
 
     context = load_user_context(sb)
     print(f"  Interests:      {len(context['interests'])}")
@@ -627,6 +645,16 @@ def run_writer():
         if before != len(candidates):
             print(f"  Drop sources: pulled {before - len(candidates)} investigative article(s) "
                   f"from the normal pool (handled as drops).")
+    # item 4 (2026-06-22): per-surface content scope for Telegram — surfaces.telegram.categories
+    # is a list of source-category bundles; ["*"] (default) = ALL bundles (current behaviour).
+    # Restricting it drops articles whose source category is not in the list (no special-casing in code).
+    tg_scope = ((config.get("surfaces") or {}).get("telegram") or {}).get("categories") or ["*"]
+    if "*" not in tg_scope:
+        _scope_cat = load_source_categories(sb)
+        _before_scope = len(candidates)
+        candidates = [a for a in candidates if _scope_cat.get(a.get("source_id")) in tg_scope]
+        print(f"  TG scope {tg_scope}: kept {len(candidates)}/{_before_scope} candidate(s) by source-category.")
+
     drop_window = int(config.get("drop_report_window_hours", 168))
     drop_candidates = load_drop_report_candidates(
         sb, drop_window, investigative_ids, exclude_account=delivery_account
@@ -693,6 +721,20 @@ def run_writer():
     highlights_min_rel = int(config.get("writer_highlights_min_relevance", 8))
     highlights = pick_highlights(leftovers, highlights_count, highlights_min_rel)
 
+    # item 3 (2026-06-19): collapse repetitive highlights — same event (deduplicator cluster_id)
+    # and same IDENTICAL analyst topic-set — and drop a highlight whose cluster already anchors a
+    # theme. Conservative + config-gated; default reproduces today's set when nothing is duplicate.
+    if config.get("highlight_dedup_enabled", True):
+        _theme_arts = [a for cl in clusters for a in cl]
+        _hl_before = len(highlights)
+        highlights = srf.dedupe_highlights(
+            highlights, _theme_arts,
+            by_cluster=bool(config.get("highlight_dedup_by_cluster", True)),
+            topic_overlap=float(config.get("highlight_dedup_topic_overlap", 1.0)),
+            min_shared_topics=int(config.get("highlight_dedup_min_shared_topics", 3)))
+        if len(highlights) != _hl_before:
+            print(f"  Highlight dedup: {_hl_before} -> {len(highlights)} (same event/topic collapsed)")
+
     print(f"  Clusters formed: {len(clusters)}\n")
     for i, c in enumerate(clusters, 1):
         print(f"  Cluster {i}: {len(c)} articles, top: '{c[0]['title'][:70]}'")
@@ -726,10 +768,14 @@ def run_writer():
             if d["woven"] and clusters:
                 clusters[0].append(d["article"])
 
-    # Fix 2: cap scales with the themes the brief actually produces, clamped floor..ceiling.
-    max_chars = max(max_chars_floor, min(max_chars_ceiling, per_theme_chars * len(clusters)))
-    print(f"  Char cap: {per_theme_chars} x {len(clusters)} themes = {per_theme_chars * len(clusters)} "
-          f"-> {max_chars} (floor {max_chars_floor}, ceiling {max_chars_ceiling})")
+    # item 2 (2026-06-22): DERIVED total cap = per-theme target x #themes + highlights allowance.
+    max_chars = srf.derive_cap(per_theme_goal, len(clusters), highlights_count, per_highlight_chars)
+    # item 1/2: the output-token budget must scale with the cap too, or L would be truncated at the
+    # old fixed limit. Derive from the cap (~3 chars/token), floored by writer_max_tokens, clamped.
+    writer_max_tokens = min(int(config.get("writer_max_output_tokens_ceiling", 8000)),
+                            max(writer_max_tokens, max_chars // 3 + 500))
+    print(f"  Char cap (derived): {per_theme_goal}/theme x {len(clusters)} + {highlights_count} hl x "
+          f"{per_highlight_chars} = {max_chars} (size {_size_level}); max_tokens={writer_max_tokens}")
 
     now_jst = datetime.now(JST)
     briefing_date = now_jst.strftime("%Y-%m-%d (%H:%M JST)")
@@ -767,7 +813,8 @@ def run_writer():
     user_prompt = build_user_prompt(
         clusters, highlights, sources_map, context["by_id"], context,
         total_in_window, relevant_count, briefing_date, max_chars, coverage_notes=theme_coverage,
-        shift_notes=shift_notes
+        shift_notes=shift_notes, per_theme_target=per_theme_goal,
+        chars_per_paragraph=int(config.get("writer_chars_per_paragraph", 1000))
     )
 
     messages = [

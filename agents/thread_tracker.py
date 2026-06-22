@@ -306,16 +306,26 @@ def build_extract_prompt(label, article_texts, max_chars=1200):
 
 
 def extract_fact(label, article_texts, article_ids, model, temperature, max_tokens,
-                 _completion=None, snippet_chars=1200):
+                 _completion=None, snippet_chars=1200, timeout=None):
     """Stage A: cheap-model structured extraction. Returns a fact dict (article_ids attached from
-    the REAL today-cluster ids, never trusted from the model) or None. Tolerant of bad JSON."""
+    the REAL today-cluster ids, never trusted from the model) or None. Tolerant of bad JSON.
+    `timeout` (2026-06-22) hard-bounds the LLM call so a hung Gemini can't hang the writer; the
+    caller's breaker aborts sequencing after a few timeouts. timeout=None = unbounded (tests)."""
     if _completion is None:
         from litellm import completion as _completion
     prompt = build_extract_prompt(label, article_texts, snippet_chars)
-    resp = _completion(model=model,
-                       messages=[{"role": "system", "content": EXTRACT_SYSTEM},
-                                 {"role": "user", "content": prompt}],
-                       temperature=temperature, max_tokens=max_tokens)
+
+    def _do():
+        return _completion(model=model,
+                           messages=[{"role": "system", "content": EXTRACT_SYSTEM},
+                                     {"role": "user", "content": prompt}],
+                           temperature=temperature, max_tokens=max_tokens)
+
+    if timeout:
+        from llm_client import call_bounded
+        resp = call_bounded(_do, timeout)
+    else:
+        resp = _do()
     raw = resp.choices[0].message.content
     try:
         obj = parse_json_obj(raw)
@@ -460,6 +470,11 @@ def detect_and_record(sb, config, clusters, sources_map, now_utc, apply=True, lo
     min_conf = float(config.get("sequencing_min_confidence", 0.5))
     price_units = config.get("sequencing_price_units", None)
     week_key = week_start_key(now_utc)
+    # 2026-06-22: bound each extraction; abort sequencing after a few consecutive failures so a
+    # dead Gemini can't hang the writer (sequencing is optional — the brief builds without notes).
+    timeout_s = float(config.get("llm_request_timeout_seconds", 60))
+    brk = int(config.get("llm_breaker_threshold", 3))
+    consec_fail = 0
 
     reset_n = reset_stale_threads(sb, week_key) if apply else 0
     threads = load_active_threads(sb, week_key)
@@ -482,9 +497,16 @@ def detect_and_record(sb, config, clusters, sources_map, now_utc, apply=True, lo
         try:
             fact = extract_fact(story["label"], story["texts"], story["article_ids"],
                                 model, temperature, max_tokens,
-                                snippet_chars=int(config.get("sequencing_snippet_chars", 1200)))
+                                snippet_chars=int(config.get("sequencing_snippet_chars", 1200)),
+                                timeout=timeout_s)
+            consec_fail = 0
         except Exception as e:
+            consec_fail += 1
             log(f"  NF-C1: extract failed for {story['label'][:40]!r}: {type(e).__name__}: {e}")
+            if consec_fail >= brk:
+                log(f"  NF-C1: extraction LLM unreachable ({consec_fail}x) — aborting sequencing; "
+                    f"brief built without 'What Changed' notes.")
+                break
             continue
         if not fact:
             continue

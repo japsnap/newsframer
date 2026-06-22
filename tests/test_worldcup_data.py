@@ -168,6 +168,33 @@ def test_empty_html_safe():
     ok("empty_payload", p["results"] == [] and p["fixtures"] == [] and p["standings"] == [] and p["live"] == [])
 
 
+def test_points_tolerant():
+    # item 6 (2026-06-19): points cell may carry a tiebreak footnote letter.
+    ok("p_plain", wd._points("3") == 3)
+    ok("p_footnote", wd._points("1 a") == 1)
+    ok("p_blank", wd._points("") == 0)
+
+
+def test_standings_host_marker_and_tied_points():
+    # item 6: a host cell '(H, Q)' must strip to the bare team (so the team->group lookup works
+    # and no phantom 'Group ?' appears), and a points cell '1 a' must parse as 1 instead of
+    # throwing and DROPPING the tied team's row (which left whole groups empty).
+    table = (
+        '<table class="wikitable"><tbody>'
+        '<tr><th>Pos</th><th>Team</th><th>Pld</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>GD</th><th>Pts</th><th>Qualification</th></tr>'
+        '<tr><td>1</td><td><a href="/wiki/Mexico">Mexico</a> (H, Q)</td><td>1</td><td>1</td><td>0</td><td>0</td><td>2</td><td>0</td><td>+2</td><td>3</td><td>Advance</td></tr>'
+        '<tr><td>2</td><td><a href="/wiki/Iran">Iran</a></td><td>1</td><td>0</td><td>1</td><td>0</td><td>2</td><td>2</td><td>0</td><td>1 a</td><td></td></tr>'
+        '</tbody></table>'
+    )
+    rows = wd._standings_rows(table, "B")
+    ok("host_marker_count", len(rows) == 2)            # tied team NOT dropped
+    mex = [r for r in rows if r["team"] == "Mexico"]
+    ok("host_marker_stripped", len(mex) == 1)          # '(H, Q)' removed
+    iran = [r for r in rows if r["team"] == "Iran"][0]
+    ok("tied_points_parsed", iran["points"] == 1)
+    ok("host_points", mex[0]["points"] == 3)
+
+
 def main():
     failed = 0
     for name, fn in sorted(globals().items()):

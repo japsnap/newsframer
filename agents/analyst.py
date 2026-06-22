@@ -24,6 +24,7 @@ from supabase import create_client
 from dotenv import load_dotenv
 
 from llm_json import parse_json_obj
+from llm_client import resilient_from_config  # 2026-06-22: timeout + fallback (Gemini-outage resilience)
 
 # Windows consoles default to cp1252 and raise UnicodeEncodeError when a print contains a
 # non-Latin character (Arabic/CJK/emoji titles are common now that global wires feed in).
@@ -216,8 +217,10 @@ def build_user_prompt(article, sources_map):
     )
 
 
-def analyze_one(article, context_block, sources_map, model):
-    """LLM call with retry. Returns (parsed_dict, tokens_in, tokens_out)."""
+def analyze_one(article, context_block, sources_map, llm):
+    """LLM call with retry. Returns (parsed_dict, tokens_in, tokens_out). `llm` is a ResilientLLM:
+    each call is hard-bounded by a timeout and falls back to a second model if the primary is
+    unreachable (2026-06-22 — a hung Gemini no longer leaves articles unscored / hangs the run)."""
     user_prompt = build_user_prompt(article, sources_map)
     system_text = load_analyst_prompt() + "\n\n" + context_block
     messages = [
@@ -228,7 +231,7 @@ def analyze_one(article, context_block, sources_map, model):
     last_err = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            response = completion(model=model, messages=messages, temperature=LLM_TEMPERATURE)
+            response, _used = llm.complete(messages, temperature=LLM_TEMPERATURE)
             raw = response.choices[0].message.content
             # Always a single dict; a 1-item array / fenced / prose-wrapped reply
             # is coerced. A non-object reply raises -> retry, then per-article skip.
@@ -325,12 +328,14 @@ def run_analyst():
     config = load_config()
     sb = get_supabase()
     model = config.get("analyst_model", "anthropic/claude-haiku-4-5")
+    llm = resilient_from_config(config, "analyst_model", "analyst_fallback_model",
+                                "anthropic/claude-haiku-4-5", label="analyst")
     cap = int(config.get("analyst_max_articles_per_run", 300))
     window_hours = int(config.get("analyst_window_hours", 30))
     start = time.time()
 
     print("NewsFramer Analyst starting...")
-    print(f"  Model: {model}  |  Cap: {cap}")
+    print(f"  Model: {model} (fallback: {llm.fallback or 'none'}, timeout {int(llm.timeout_s)}s)  |  Cap: {cap}")
 
     context = load_user_context(sb)
     interests = context["interests"]
@@ -354,7 +359,7 @@ def run_analyst():
 
     for i, article in enumerate(articles, 1):
         try:
-            parsed, t_in, t_out = analyze_one(article, context_block, sources_map, model)
+            parsed, t_in, t_out = analyze_one(article, context_block, sources_map, llm)
             total_in += t_in
             total_out += t_out
             cleaned = validate_and_clean(parsed, hypothesis_ids, article)
@@ -381,10 +386,13 @@ def run_analyst():
             print(f"[{i}/{len(articles)}] FAILED: {e} | {article.get('title','')[:60]}")
             continue
 
+    used_model = llm.effective_model()   # the fallback if the breaker opened, else the primary
     duration_ms = int((time.time() - start) * 1000)
-    cost = estimate_cost(config, model, total_in, total_out)
+    cost = estimate_cost(config, used_model, total_in, total_out)
     status = "success" if failed == 0 else "partial"
     err = f"{failed} article(s) failed" if failed else None
+    if llm.used_fallback:   # observability: the primary provider was down this run
+        err = (err + "; " if err else "") + f"primary unreachable — used fallback {used_model}"
 
     # Loud on silent data loss: skipped articles drop out of scoring entirely.
     if failed:
@@ -393,7 +401,7 @@ def run_analyst():
 
     record_run(sb, {
         "agent_name": "analyst",
-        "model_used": model,
+        "model_used": used_model,
         "tokens_in": total_in,
         "tokens_out": total_out,
         "cost_usd": round(cost, 6),

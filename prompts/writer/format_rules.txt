@@ -5,15 +5,15 @@ Structure:
 2. Produce EXACTLY the number of themes given in the instructions below — one section per theme.
 3. Each theme section structure:
    - `## <Descriptive theme title>` — describe the actual content (e.g. "Bitcoin Slides Under $77K Amid Bond Yield Pressure", not "Crypto Markets"). Use Title Case: capitalize the first letter of every major word (keep short joining words like a, an, the, of, to, in, on, as, and, or, for lowercase unless first). Keep acronyms, tickers, and product names in their established casing (US, AI, CISA, xAI, DeFi, NATO, ETF).
-   - 1 to 3 paragraphs of multi-source fact synthesis. Each paragraph 3-6 sentences.
+   - Multi-source fact synthesis organized into clear paragraphs. Write each theme section to approximately the Per-theme length TARGET given in the instructions below — add or trim paragraphs to hit that length (a richer theme may run a little longer, a thin one a little shorter).
    - If any article in this theme has a hypothesis match, include a line: `**Hypothesis check:** <hypothesis topic> (<stance>) — <article title> [N] aligns / challenges this view.`
    - If any article has a notable differentiator from Analyst, weave it into the synthesis. Do not list differentiators as a separate block.
    - End section with `**Articles:**` followed by a numbered list of articles in this theme. Each entry: `[N] <title> — [<source name>](<url>)` — the SOURCE NAME is the clickable Markdown link that opens the article; the title is plain text; NEVER print a bare/raw URL.
 
-LENGTH LIMITS:
-- Stay UNDER the Hard character limit given in the instructions below (it includes the footer). Count carefully; if you would exceed, shorten paragraphs proportionally.
+LENGTH:
+- Write each theme to approximately the Per-theme length TARGET in the instructions below — this is the PRIMARY length driver; AIM for it, do not merely stay under a ceiling.
+- The Hard character limit is the overall ceiling (it includes the footer). If the total would exceed it, trim proportionally; stay under it.
 - Produce EXACTLY the number of themes and highlights given in the instructions — do not add or drop any.
-- Divide the character budget across the themes so the whole stays within the limit; a richer theme may run longer than a thin one.
 - Hypothesis check lines are mandatory when applicable. Do not skip.
 
 CITATION RULES:
@@ -37,4 +37,4 @@ FOOTER (after Highlights):
   `_Briefing generated from <total_input> articles. <relevant_count> made the relevance cutoff. <theme_count> themes, <highlight_count> highlights._`
 
 LENGTH (reminder):
-- The theme count, highlight count, and character limit are ALL provided in the instructions below. Follow those exact numbers — do not assume any fixed count or length.
+- The theme count, highlight count, per-theme length TARGET, and overall character limit are ALL provided in the instructions below. Follow those exact numbers — do not assume any fixed count or length.

@@ -154,10 +154,13 @@ def url_hash(url: str) -> str:
 
 # --- RSS Fetcher ---
 def fetch_rss(source: dict, cutoff: datetime, max_articles: int) -> list:
-    articles = []
+    # item 5 (2026-06-22): scan ALL in-window entries, then keep the NEWEST `max_articles` by
+    # published_at — RSS feed order is not always newest-first, so taking the top-N raw could drop
+    # newer stories. Entries with no date default to now() (treated as newest), as before.
+    candidates = []
     try:
         feed = feedparser.parse(source["rss_url"])
-        for entry in feed.entries[:max_articles * 2]:
+        for entry in feed.entries:
             title = entry.get("title", "")
             url = entry.get("link", "")
 
@@ -174,25 +177,24 @@ def fetch_rss(source: dict, cutoff: datetime, max_articles: int) -> list:
                 continue
 
             content = entry.get("summary", "") or entry.get("description", "")
-
-            articles.append({
+            sort_dt = published or datetime.now(timezone.utc)
+            candidates.append((sort_dt, {
                 "source_id": source["id"],
                 "title": title,
                 "url": url,
                 "content_raw": content[:5000],
-                "published_at": published.isoformat() if published else datetime.now(timezone.utc).isoformat(),
+                "published_at": (published.isoformat() if published else datetime.now(timezone.utc).isoformat()),
                 "branch": None,
                 "duplicate_count": 1,
-            })
-
-            if len(articles) >= max_articles:
-                break
+            }))
 
     except Exception as e:
         FETCH_ERRORS.append(source.get("name", source.get("id", "?")))
         print(f"  RSS error for {source['name']}: {e}")
+        return []
 
-    return articles
+    candidates.sort(key=lambda t: t[0], reverse=True)   # newest-first
+    return [art for _, art in candidates[:max_articles]]
 
 # --- Web Scraper ---
 def fetch_web(source: dict, cutoff: datetime, max_articles: int) -> list:
@@ -238,32 +240,28 @@ def deduplicate_batch(articles: list) -> list:
             unique.append(a)
     return unique
 
-# --- NF-NEW11: fetch profile (full vs light) ---
+# --- item 5 (2026-06-22): three fetch tiers (full / normal / light), config-driven ---
 def resolve_fetch_caps(config):
-    """Pick the per-source cap + safety ceiling for the active fetch profile.
-
-      'full' (default): max_articles_per_source / fetch_safety_ceiling — today's full-day context.
-      'light':          fetch_light_max_per_source / fetch_light_safety_ceiling — the cheaper
-                        most-recent-~N profile (the old behaviour), for when full context isn't
-                        needed. Flip one config key, no code edit.
-
-    A missing/unknown/odd profile falls back to 'full', so the DEFAULT behaviour is unchanged.
-    Returns (profile, max_per_source, safety_ceiling). Pure; tolerant of a missing/broken config
-    (mirrors the caller's own config.get defaults, so a hollow config reproduces current behaviour)."""
+    """Pick the per-source cap for the active fetch profile. Three tiers in config['fetch_profiles']
+    (full / normal / light, default {50,30,10}); a missing/unknown profile falls back to 'normal'.
+    Returns (profile, max_per_source, safety_ceiling). Pure + tolerant of a hollow/broken config."""
     def _cfg(key, default):
         try:
             v = config.get(key, default)
             return default if v is None else v
         except Exception:
             return default
-    profile = str(_cfg("fetch_profile", "full")).strip().lower()
-    if profile == "light":
-        return ("light",
-                int(_cfg("fetch_light_max_per_source", 10)),
-                int(_cfg("fetch_light_safety_ceiling", 600)))
-    return ("full",
-            _cfg("max_articles_per_source", 10),
-            int(_cfg("fetch_safety_ceiling", 600)))
+    profiles = _cfg("fetch_profiles", {"full": 50, "normal": 30, "light": 10})
+    if not isinstance(profiles, dict) or not profiles:
+        profiles = {"full": 50, "normal": 30, "light": 10}
+    profile = str(_cfg("fetch_profile", "normal")).strip().lower()
+    if profile not in profiles:
+        profile = "normal" if "normal" in profiles else next(iter(profiles))
+    try:
+        cap = int(profiles.get(profile, 30))
+    except (TypeError, ValueError):
+        cap = 30
+    return (profile, cap, int(_cfg("fetch_safety_ceiling", 3000)))
 
 
 # --- Main Fetcher ---

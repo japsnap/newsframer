@@ -13,27 +13,40 @@ classifier_model: "gemini/gemini-2.5-flash-lite"
 # analyst_model: "gemini/gemini-2.5-flash"
 # writer_model: "gemini/gemini-2.5-pro"
 
+# --- LLM resilience (2026-06-22 incident: Gemini became unreachable from the host; the Gemini-only
+#     stages — classifier, deduplicator embeddings, title-dedup, analyst, sequencing — had no request
+#     timeout and no fallback, so every call HUNG and the whole pipeline died: no Telegram brief +
+#     a hung WhatsApp run). Now every LLM call is HARD-bounded by a wall-clock timeout, and the chat
+#     stages fall back to a second model when the primary fails, with a sticky per-run breaker. The
+#     fallback ONLY fires on a primary FAILURE, so a healthy run is byte-for-byte unchanged.
+#     agents/llm_client.py reads these. ---
+llm_request_timeout_seconds: 60      # hard per-call wall-clock bound — a hung provider fails fast
+llm_breaker_threshold: 3             # consecutive primary failures before switching to the fallback for the rest of the run
+classifier_fallback_model: "anthropic/claude-haiku-4-5"   # used ONLY if the classifier primary (Gemini) fails
+analyst_fallback_model: "anthropic/claude-haiku-4-5"      # used ONLY if the analyst primary (Gemini) fails
+title_dedup_fallback_model: "anthropic/claude-haiku-4-5"  # used ONLY if the title-dedup primary fails
+deduplicator_embedding_breaker_threshold: 3   # consecutive embedding failures -> skip dedup gracefully
+                                              #   (no Anthropic embeddings exist to fall back to; the brief
+                                              #   still builds, clustering just degrades for that run)
+# Sequencing has NO fallback (optional post-pass): on the timeout it aborts after llm_breaker_threshold
+# consecutive failures and the brief is produced without the "What Changed" notes.
+
 # Fetcherの設定
 fetch_hours_back: 24
 first_run_hours_back: 48
-max_articles_per_source: 100   # 2026-06-15 (operator): raised 10 -> 100. The fetch is "newest-first"
-                               #   (top of each RSS feed, within fetch_hours_back); a small cap + one
-                               #   daily poll dropped earlier-in-the-day stories from busy sources.
-                               #   100 effectively takes the full 24h each feed exposes. This is the
-                               #   GLOBAL/basic setting; a future "light mode" (cap ~10, most-recent
-                               #   only) is backlogged as a switchable profile.
 max_articles_total: 250   # SUPERSEDED: order-based truncation removed (it starved later/newer sources). Kept for reference only; not read by the fetcher.
-fetch_safety_ceiling: 3000  # 2026-06-15: raised 600 -> 3000 to match the 100/source cap (43 producing
-                            #   sources x up to 100). Pure runaway guard: only if a run exceeds this do we
-                            #   cut, and then RANDOMLY across all articles (never by source order). 3000
-                            #   caps a tens-of-thousands runaway without throwing away normal-load context.
+fetch_safety_ceiling: 3000  # pure runaway guard: only if a run exceeds this do we cut, and then RANDOMLY
+                            #   across ALL articles (never by source order), so no source is starved.
 
-# NF-NEW11: fetch profile switch (flip ONE key, no code edit).
-#   full  (default) = the 100/source full-day context above (max_articles_per_source / fetch_safety_ceiling).
-#   light           = the cheaper most-recent-~N profile (the old behaviour) for when full context isn't needed.
-fetch_profile: full
-fetch_light_max_per_source: 10     # most-recent N per source when fetch_profile: light
-fetch_light_safety_ceiling: 600    # tighter runaway guard for the light profile
+# item 5 (2026-06-22): THREE fetch tiers, config-driven, per-source caps. Each profile keeps the
+# NEWEST N items per source — the fetcher now sorts entries by published_at DESC BEFORE capping
+# (RSS feed order is not always newest-first). Flip `fetch_profile` to switch; no code edit.
+# (Supersedes the old max_articles_per_source / fetch_light_* keys.)
+fetch_profile: normal           # full | normal | light  — LIVE = normal (30/source)
+fetch_profiles:
+  full: 50
+  normal: 30
+  light: 10
 
 # Priority
 priority_source_types: ["vc_blog", "research", "blog"]
@@ -97,13 +110,12 @@ writer_min_themes: 3
 writer_max_articles_per_theme: 6
 writer_window_hours: 24                # §4.5: 24h day-window (reduced from 30 to avoid overlap)
 writer_delivery_account: "newsframer"  # §4.3: exclude article IDs already delivered to this account
-writer_max_chars: 8500                  # superseded by per-theme scaling below (Fix 2); kept for reference
-writer_per_theme_chars: 2500            # Fix 2: char budget per theme
-writer_max_chars_floor: 6000            # Fix 2: cap never below this
-writer_max_chars_ceiling: 16000         # Fix 2: cap never above this
 writer_char_overrun_warn_ratio: 1.0     # NF-F2: flag a brief in the run log when chars > cap x this (1.0 = any overrun; 1.15 = only >15% over)
 writer_highlights_count: 8         # target number of highlights
-writer_highlights_min_relevance: 8 # only rel >= 8 articles become highlights
+writer_highlights_min_relevance: 5 # item 6 (2026-06-22): rel >= 5 articles become highlights (was 8)
+# item 1/2 (2026-06-22): the per-theme char TARGET and the total char cap are now DERIVED from
+# theme_size_levels (see the "Per-surface OUTPUT rendering" block). The old writer_per_theme_chars /
+# writer_max_chars_floor / writer_max_chars_ceiling / writer_max_chars are removed (ONE control = the size level).
 
 # Drop-reports (spec §8.5, basic version — Telegram-self only)
 drop_report_window_hours: 168      # 7-day deduped window for investigative drops (explicit exception to the §4.5 24h selection rule)
@@ -194,7 +206,7 @@ worldcup_reply_line: "Any questions, reply"  # closing invite; "" disables it. R
 # structure for other events after the World Cup: copy this block (rename football_* -> <event>_*),
 # point the feeds at the new sources, add a maybe_send_<event>() call in run_whatsapp_brief — no
 # engine changes. The window/duration/topic are all knobs here, never hard-coded.
-football_enabled: true                  # ON 2026-06-17 (live at 11:00 JST); set false to revert instantly
+football_enabled: false                 # OFF 2026-06-19 (NF item 4: football headlines removed from the 11:00 WhatsApp dispatch; World Cup message kept). true to re-enable.
 football_header: "⚽ *Football — Today's Headlines*"   # message title (WhatsApp *bold*)
 football_window_hours: 24               # only headlines published within this lookback are shown
 football_max_items: 10                  # total headlines in the message
@@ -239,18 +251,65 @@ critic_alert_min_severity: "Important"  # only ping when a finding is at/above t
 # falls back to the global writer_* value. `medium` is intentionally EMPTY (= today's defaults),
 # so a chat with no length (or length: medium) is byte-for-byte unchanged.
 default_length: medium
-length_levels:
-  short:
-    max_themes: 3
-    min_themes: 2
-    per_theme_chars: 1200
-    max_articles_per_theme: 3
-  medium: {}                            # = the global writer_* defaults (today's behaviour)
-  long:
-    max_themes: 8
-    per_theme_chars: 3500
-    max_articles_per_theme: 8
-    max_chars_ceiling: 22000
+# item 3 (2026-06-22): a chat's `length` (whatsapp_deliveries.yaml) maps onto the ONE size model —
+# short=S, medium=M, long=L — driving the per-theme SIZE only (theme_size_levels). The old per-level
+# theme-count / articles-per-theme overrides are removed (no chat used them); a chat with no `length`
+# uses the surface's theme_size (M). Change a chat's size by setting its `length` in the registry.
+length_to_size: {short: S, medium: M, long: L}
+
+# --- Per-surface OUTPUT rendering (2026-06-19 output-fixes) — UI-ready; Telegram & WhatsApp are
+#     tuned INDEPENDENTLY. agents/surface_render.py reads these. NOTHING is hard-coded in code. ---
+# item 1/2/3 (2026-06-22 rebuild): per-theme SIZE is ONE control. theme_size_levels maps a level to
+# an ABSOLUTE per-theme char TARGET — the writer is told to WRITE each theme to ~this length (the old
+# model only scaled a CEILING, which the LLM underfilled, so L never actually lengthened output). The
+# total char cap is DERIVED, never a separate number:
+#     cap = per_theme_target x (#themes) + writer_highlights_count x writer_per_highlight_chars
+# so it tracks S/M/L and the theme count automatically. M = today's rendered length (~2000/theme);
+# L = 2x (4000); S = 0.5x (1000). The legacy per-chat length (short/medium/long) maps short->S,
+# medium->M, long->L (one model).
+theme_size_levels: {S: 1000, M: 2000, L: 4000}
+writer_per_highlight_chars: 250            # highlights allowance per highlight, for the derived total cap
+writer_max_output_tokens_ceiling: 8000     # item 1/2: the LLM output-token budget is DERIVED from the char
+                                           #   cap (~3 chars/token) so L isn't truncated; this is the model's
+                                           #   hard output ceiling (Haiku) the derivation clamps to.
+writer_chars_per_paragraph: 1000           # item 1: per-theme length is expressed to the LLM as a PARAGRAPH
+                                           #   count = round(per_theme_target / this). Calibrated to Haiku on
+                                           #   real output (M=2 paras ~2080 chars = today; L=4 ~3886 = ~1.87x).
+surfaces:
+  telegram:
+    theme_size: M            # S | M | L
+    categories: ["*"]        # item 4: per-surface content scope by source-category bundle. ["*"] = ALL bundles (current behaviour). Restrict e.g. ["crypto","geopolitics","pakistan",...]
+    show_source: true        # show the source NAME
+    include_link: true       # attach the article URL
+    link_style: hyperlink    # hyperlink = clickable source name, NO visible URL | plain = raw URL shown
+  whatsapp:
+    theme_size: M            # independent of Telegram
+    per_category_theme_cap: 2  # item 6: max themes any one source-category may take in a WA brief (mirrors the Telegram bundle_theme_cap)
+    show_source: true
+    include_link: false      # WhatsApp: TITLE + SOURCE only, no link
+    link_style: hyperlink    # ignored while include_link is false
+# item 7: secondary (non-primary) languages — Urdu today — drop the source list before translating
+# (false = current behaviour). true = keep TITLE + SOURCE in the secondary language too.
+include_sources_in_secondary_language: false
+
+# item 3 — highlight de-duplication: stop the SAME event/topic repeating across the Highlights
+#   (today 4 crypto-regulation items share one identical topic-set). Conservative by default.
+highlight_dedup_enabled: true        # false = today's behaviour (no dedup)
+highlight_dedup_by_cluster: true     # collapse highlights sharing a deduplicator cluster_id, and
+                                     #   drop a highlight whose cluster already anchors a theme
+highlight_dedup_topic_overlap: 1.0   # 1.0 = collapse ONLY identical analyst topic-sets (conservative)
+highlight_dedup_min_shared_topics: 3 # ...and only when >= this many topics overlap (ignores thin 1-2 tags)
+
+# item 5 — WhatsApp topic EXCLUDE filter: drop crypto/markets stories that leak in because the
+#   analyst tags them 'geopolitics affecting markets' (substring 'geopolit' matched the include
+#   list). Per-category, so a crypto-stealing-MALWARE story still reaches the cybersecurity surface.
+#   Registry-overridable per deploy (topic_exclude_keywords in whatsapp_deliveries.yaml). Omitting a
+#   category (or []) = no exclusions for it. Default = "loose" (explicit crypto/prediction-market
+#   only — Shota 2026-06-19); markets/oil/Fed-policy wraps are deliberately KEPT.
+whatsapp_topic_exclude_keywords:
+  geopolitics: ["crypto", "bitcoin", "ether", "stablecoin", "prediction market", "kalshi", "polymarket", "cme group", "cftc", "perpetual futures"]
+  pakistan:    ["crypto", "bitcoin", "ether", "stablecoin", "prediction market", "kalshi", "polymarket", "cme group", "cftc", "perpetual futures"]
+  # cybersecurity: []   # intentionally absent -> crypto-stealing-malware still reaches the cyber surface
 
 # --- Analyst topic-weight scale (NF-NEW14 groundwork) — how a user_context.weight nudges relevance ---
 # Each interest/hypothesis in the `user_context` table carries a signed weight (e.g. +3..-3); the

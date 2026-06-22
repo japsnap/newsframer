@@ -122,17 +122,29 @@ def _pmint(s):
         return 0
 
 
+def _points(s):
+    """Points cell — tolerant of a trailing tiebreak footnote letter, e.g. '1 a' -> 1, '3' -> 3.
+    Wikipedia marks teams level on points with a letter (the head-to-head group); the old
+    int('1 a') threw and DROPPED every tied team's row, so groups level on points (G, H on
+    2026-06-19) rendered empty (item 6, 're-verify all 12 group tables')."""
+    m = re.match(r"\s*(\d+)", s or "")
+    return int(m.group(1)) if m else 0
+
+
 def _standings_rows(thtml, group):
     out = []
     for row in re.findall(r"(?s)<tr[^>]*>(.*?)</tr>", thtml):
         vals = [_clean(c) for c in re.findall(r"(?s)<t[hd][^>]*>(.*?)</t[hd]>", row)]
         if len(vals) < 10 or not re.match(r"^\d+$", vals[0]):
             continue  # skip header / malformed rows
-        team = re.sub(r"\s*\(.\)\s*$", "", vals[1]).strip()  # drop host "(H)" marker
+        # Drop trailing host/qualified markers: "(H)", "(H, Q)", "(Q)", even "(H)(Q)". The old
+        # single-char "(.)" form missed "(H, Q)" -> the team name kept the marker, the team->group
+        # lookup failed, and that row fell into a phantom "Group ?" (item 6, 2026-06-19).
+        team = re.sub(r"(?:\s*\([^)]*\))+\s*$", "", vals[1]).strip()
         try:
             out.append({"group": group, "team": team, "played": int(vals[2]),
                         "won": int(vals[3]), "drawn": int(vals[4]), "lost": int(vals[5]),
-                        "gd": _pmint(vals[8]), "points": int(vals[9])})
+                        "gd": _pmint(vals[8]), "points": _points(vals[9])})
         except (ValueError, IndexError):
             continue
     return out

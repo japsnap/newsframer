@@ -40,6 +40,17 @@ from dotenv import load_dotenv
 
 from llm_json import parse_json_obj
 from run_log import record_run
+from llm_client import resilient_from_config  # 2026-06-22: timeout + fallback (Gemini-outage resilience)
+
+
+def _router_completion(llm):
+    """Adapt a ResilientLLM to the `_completion(model=..., messages=..., **kw) -> response` shape
+    confirm_same_event expects, so the cheap confirm gets the hard timeout + fallback + breaker
+    (the explicit `model` arg is ignored — the router owns model selection)."""
+    def _fn(model=None, messages=None, **kw):
+        resp, _used = llm.complete(messages, **kw)
+        return resp
+    return _fn
 
 load_dotenv()
 try:
@@ -230,6 +241,9 @@ def run_title_dedup(apply=False, only_unscored=None):
     config = load_config()
     sb = get_supabase()
     model = config.get("title_dedup_model", config.get("classifier_model", "gemini/gemini-2.5-flash-lite"))
+    llm = resilient_from_config(config, "title_dedup_model", "title_dedup_fallback_model",
+                                config.get("classifier_model", "gemini/gemini-2.5-flash-lite"), label="title_dedup")
+    _comp = _router_completion(llm)
     window = int(config.get("title_dedup_window_hours", config.get("deduplicator_window_hours", 48)))
     if only_unscored is None:
         only_unscored = bool(config.get("title_dedup_only_unscored", True))
@@ -249,7 +263,8 @@ def run_title_dedup(apply=False, only_unscored=None):
     confirmed_drops = []
     kept_all = 0
     for cid, members in clusters.items():
-        same = confirm_same_event([m.get("title") or "" for m in members], model, temperature, max_tokens)
+        same = confirm_same_event([m.get("title") or "" for m in members], model, temperature, max_tokens,
+                                  _completion=_comp)
         keep_ids, drops = select_representatives(members, bias_of, category_of, bias_categories, max_keep)
         keep_set = set(keep_ids)
         print("-" * 78)
@@ -285,7 +300,7 @@ def run_title_dedup(apply=False, only_unscored=None):
         print("  DRY RUN — nothing deleted. Re-run with --apply to collapse.")
 
     record_run(sb, {
-        "agent_name": "title_dedup", "model_used": model,
+        "agent_name": "title_dedup", "model_used": llm.effective_model(),
         "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0,
         "duration_ms": int((time.time() - t0) * 1000),
         "status": "success",

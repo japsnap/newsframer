@@ -21,6 +21,7 @@ from supabase import create_client
 from dotenv import load_dotenv
 
 from llm_json import parse_json_list
+from llm_client import resilient_from_config  # 2026-06-22: timeout + fallback (Gemini-outage resilience)
 
 # Windows cp1252 consoles crash printing non-Latin titles (global feeds) — make stdout
 # UTF-8 so logging an article can never kill the run (2026-06-16 smoke-test incident).
@@ -128,11 +129,12 @@ def build_user_prompt(batch, sources_map):
 
 
 # --- LLM call ---
-def classify_batch(batch, sources_map, model):
+def classify_batch(batch, sources_map, llm):
     user_prompt = build_user_prompt(batch, sources_map)
-    response = completion(
-        model=model,
-        messages=[
+    # 2026-06-22: hard-bounded + fallback (a hung/unreachable Gemini fails fast -> Anthropic),
+    # so a provider outage can no longer thrash the classifier for an hour.
+    response, _used = llm.complete(
+        [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
         ],
@@ -217,10 +219,12 @@ def run_classifier():
     config = load_config()
     sb = get_supabase()
     model = config.get("classifier_model", "gemini/gemini-2.5-flash-lite")
+    llm = resilient_from_config(config, "classifier_model", "classifier_fallback_model",
+                                "gemini/gemini-2.5-flash-lite", label="classifier")
     start_time = time.time()
 
     print("OpenClaw Classifier starting...")
-    print(f"  Model: {model}")
+    print(f"  Model: {model} (fallback: {llm.fallback or 'none'}, timeout {int(llm.timeout_s)}s)")
     print(f"  Batch size: {BATCH_SIZE}")
 
     articles = load_unclassified_articles(sb)
@@ -247,7 +251,7 @@ def run_classifier():
         print(f"Batch {batch_num}/{num_batches} ({len(batch)} articles)...")
 
         try:
-            results, t_in, t_out = classify_batch(batch, sources_map, model)
+            results, t_in, t_out = classify_batch(batch, sources_map, llm)
             total_tokens_in += t_in
             total_tokens_out += t_out
 
@@ -264,10 +268,13 @@ def run_classifier():
             print(f"  Batch {batch_num} failed: {e}")
             continue
 
+    used_model = llm.effective_model()   # the fallback if the breaker opened, else the primary
     duration_ms = int((time.time() - start_time) * 1000)
-    cost = estimate_cost(config, model, total_tokens_in, total_tokens_out)
+    cost = estimate_cost(config, used_model, total_tokens_in, total_tokens_out)
     status = "success" if failed_batches == 0 else "partial"
     error_msg = f"{failed_batches} batch(es) failed" if failed_batches else None
+    if llm.used_fallback:   # observability: the primary provider was down this run
+        error_msg = (error_msg + "; " if error_msg else "") + f"primary unreachable — used fallback {used_model}"
 
     # Loud on silent data loss: a dropped batch / skipped article means the brief
     # is thinner than it should be, which otherwise looks identical to a clean run.
@@ -277,7 +284,7 @@ def run_classifier():
 
     record_run(sb, {
         "agent_name": "classifier",
-        "model_used": model,
+        "model_used": used_model,
         "tokens_in": total_tokens_in,
         "tokens_out": total_tokens_out,
         "cost_usd": round(cost, 6),

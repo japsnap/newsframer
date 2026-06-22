@@ -9,6 +9,15 @@ topic_keywords:
   pakistan: ["pakistan", "kashmir", "balochistan", "islamabad"]
   cybersecurity: ["cyber", "malware", "ransomware", "vulnerability", "exploit", "breach", "cve", "zero-day"]
 
+# Optional per-deploy override of the per-category EXCLUDE filter (item 5, 2026-06-19): drop a
+# story from a category even if an include keyword matched — e.g. crypto/markets stories the
+# analyst tagged 'geopolitics affecting markets'. Omit this block to use the config default
+# (whatsapp_topic_exclude_keywords in config/models.yaml). A category with no key (or []) has NO
+# exclusions — e.g. cybersecurity below is intentionally absent so crypto-MALWARE still gets through.
+# topic_exclude_keywords:
+#   geopolitics: ["crypto", "bitcoin", "ether", "stablecoin", "prediction market", "kalshi", "polymarket", "cme group", "cftc", "perpetual futures"]
+#   pakistan:    ["crypto", "bitcoin", "ether", "stablecoin", "prediction market", "kalshi", "polymarket", "cme group", "cftc", "perpetual futures"]
+
 deliveries:
   - name: "Example Group"
     target: "000000000000000000@g.us"   # real group JID, captured once

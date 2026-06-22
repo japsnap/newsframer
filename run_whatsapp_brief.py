@@ -31,6 +31,7 @@ from agents.deliver import record_delivered, send_alert  # noqa: E402  (§4.3 co
 from agents.run_log import record_run  # noqa: E402  (NF-14: track WhatsApp-path LLM cost)
 from agents.char_monitor import overrun_flag  # noqa: E402  (NF-F2: over-cap quality flag)
 from agents.window_audit import window_span_report  # noqa: E402  (NF-NEW2: provable 24h window)
+from agents import surface_render as srf  # noqa: E402  (2026-06-19: size/exclude/link/dedup)
 from litellm import completion  # noqa: E402
 from datetime import datetime, timezone, timedelta  # noqa: E402
 
@@ -208,50 +209,47 @@ _SEND_TIMEOUT = None
 
 
 def resolve_length(config, length):
-    """Effective brief-shape knobs for a length level (short/medium/long). A level may override
-    any of: max_themes, min_themes, max_articles_per_theme, per_theme_chars, max_chars_floor,
-    max_chars_ceiling, min_relevance, relevance_floor; anything omitted falls back to the global
-    writer_* value, so 'medium' (empty) reproduces today's behaviour. Unknown/None -> default_length.
-    Pure / config-driven (no hard-coded numbers; defaults reproduce current behaviour)."""
-    levels = config.get("length_levels", {}) or {}
-    lvl = length or config.get("default_length", "medium")
-    ov = levels.get(lvl, {}) or {}
-
-    def pick(key, gkey, dflt):
-        return int(ov.get(key, config.get(gkey, dflt)))
-
+    """item 3 (2026-06-22): a chat's `length` (short/medium/long, or None) maps onto the ONE size
+    model via config['length_to_size'] (short=S / medium=M / long=L) and OVERRIDES the whatsapp
+    surface theme_size; None -> the surface theme_size. Theme counts / articles-per-theme come from
+    the global writer_* values. Pure / config-driven (the per-theme char TARGET drives length)."""
+    size = srf.resolve_size_level(config, "whatsapp", chat_length=length)
     return {
-        "level": lvl,
-        "min_rel": pick("min_relevance", "writer_min_relevance", 6),
-        "rel_floor": pick("relevance_floor", "writer_relevance_floor", 4),
-        "max_themes": pick("max_themes", "writer_max_themes", 5),
-        "min_themes": pick("min_themes", "writer_min_themes", 3),
-        "max_per_theme": pick("max_articles_per_theme", "writer_max_articles_per_theme", 6),
-        "per_theme_chars": pick("per_theme_chars", "writer_per_theme_chars", 2500),
-        "floor": pick("max_chars_floor", "writer_max_chars_floor", 6000),
-        "ceiling": pick("max_chars_ceiling", "writer_max_chars_ceiling", 16000),
+        "level": length or config.get("default_length", "medium"),
+        "size": size,
+        "min_rel": int(config.get("writer_min_relevance", 6)),
+        "rel_floor": int(config.get("writer_relevance_floor", 4)),
+        "max_themes": int(config.get("writer_max_themes", 5)),
+        "min_themes": int(config.get("writer_min_themes", 3)),
+        "max_per_theme": int(config.get("writer_max_articles_per_theme", 6)),
+        "per_theme_target": srf.per_theme_target(config, size),
     }
 
 
-def generate_brief(config, sb, categories, topic_keywords, length=None):
+def generate_brief(config, sb, categories, topic_keywords, length=None, exclude_keywords=None):
     """Returns (briefing_text, model_used, selected_ids) or (None, None, []) when nothing qualifies.
     `length` (short/medium/long, NF-E2) selects the brief-shape knobs via resolve_length (default
-    => medium => today's behaviour)."""
+    => medium => today's behaviour). `exclude_keywords` (item 5, 2026-06-19) is the per-category
+    negative topic filter that drops crypto/markets leaks; None => include-only (today's behaviour)."""
     model = config.get("writer_model", "anthropic/claude-haiku-4-5")
     fallback_model = config.get("writer_fallback_model", "gemini/gemini-2.5-flash-lite")
     window_hours = int(config.get("writer_window_hours", 24))
     L = resolve_length(config, length)
     min_rel, rel_floor = L["min_rel"], L["rel_floor"]
     max_themes, min_themes = L["max_themes"], L["min_themes"]
-    max_per_theme, per_theme_chars = L["max_per_theme"], L["per_theme_chars"]
-    floor, ceiling = L["floor"], L["ceiling"]
-    print(f"  length level: {L['level']} (max_themes={max_themes}, ~{per_theme_chars} chars/theme)")
+    max_per_theme = L["max_per_theme"]
+    per_theme_goal = L["per_theme_target"]
+    per_highlight_chars = int(config.get("writer_per_highlight_chars", 250))
+    print(f"  size {L['size']} (len={L['level']}) -> ~{per_theme_goal} chars/theme target, max_themes={max_themes}")
 
     candidates, _total = load_window_scored_articles(sb, window_hours, exclude_account=None)
     r = sb.table("sources").select("id, name").execute()
     sources_map = {s["id"]: s.get("name", "Unknown") for s in (r.data or [])}
-    cand = [a for a in candidates if topic_match(a, categories, topic_keywords)]
-    print(f"  in-window scored: {len(candidates)} | topic-match {categories}: {len(cand)}")
+    # item 5 (2026-06-19): include match AND per-category exclude (drops crypto/markets leaks that
+    # the analyst tagged 'geopolitics affecting markets'). exclude_keywords None => include-only.
+    cand = [a for a in candidates if srf.passes_topic_filter(
+        a["score"].get("topics"), categories, topic_keywords, exclude_keywords)]
+    print(f"  in-window scored: {len(candidates)} | topic-match {categories} (excludes on): {len(cand)}")
     # NF-NEW2: prove the refreshed-topic set really spans ~24h (existing ~19h + the 06:00->11:00 gap).
     _fresh_h = int(config.get("whatsapp_fresh_hours", 6))
     print("  " + window_span_report([a.get("published_at") for a in cand],
@@ -287,31 +285,70 @@ def generate_brief(config, sb, categories, topic_keywords, length=None):
     clusters, leftovers = cluster_by_topic_overlap(articles, max_themes, max_per_theme)
     if not clusters:
         return None, None, []
+    # item 6 (2026-06-22): per-category theme cap for WhatsApp — assign each cluster its majority
+    # SOURCE category (the same cluster_bundle logic Telegram uses) and keep <= cap themes per
+    # category; over-cap clusters are demoted to the highlights pool. Config-driven; 0/absent = no cap.
+    _cap = int(((config.get("surfaces") or {}).get("whatsapp") or {}).get("per_category_theme_cap", 0) or 0)
+    if _cap > 0 and clusters:
+        from agents.bundle_floors import cluster_bundle
+        _src_cat = {s["id"]: s.get("category")
+                    for s in (sb.table("sources").select("id, category").execute().data or [])}
+        _kept, _per, _dropped = [], {}, []
+        for _cl in clusters:   # already best-first by composite score
+            _b = cluster_bundle(_cl, _src_cat)
+            if _b is not None and _per.get(_b, 0) >= _cap:
+                _dropped.append(_cl)
+            else:
+                if _b is not None:
+                    _per[_b] = _per.get(_b, 0) + 1
+                _kept.append(_cl)
+        if _dropped:
+            leftovers = leftovers + [a for _cl in _dropped for a in _cl]
+            print(f"  WA per-category cap {_cap}: kept {len(_kept)}/{len(clusters)} themes "
+                  f"(demoted {len(_dropped)} over-cap cluster(s) to highlights).")
+        clusters = _kept
     highlights = pick_highlights(
         leftovers, int(config.get("writer_highlights_count", 8)),
         int(config.get("writer_highlights_min_relevance", 8)),
     )
+    # item 3 (2026-06-19): collapse repetitive highlights (same event/topic) — same machinery as
+    # the Telegram brief. Config-gated; default reproduces today's set when nothing is duplicate.
+    if config.get("highlight_dedup_enabled", True):
+        _theme_arts = [a for cl in clusters for a in cl]
+        _hb = len(highlights)
+        highlights = srf.dedupe_highlights(
+            highlights, _theme_arts,
+            by_cluster=bool(config.get("highlight_dedup_by_cluster", True)),
+            topic_overlap=float(config.get("highlight_dedup_topic_overlap", 1.0)),
+            min_shared_topics=int(config.get("highlight_dedup_min_shared_topics", 3)))
+        if len(highlights) != _hb:
+            print(f"  highlight dedup: {_hb} -> {len(highlights)} (same event/topic collapsed)")
     selected_ids = list(dict.fromkeys(
         [a["id"] for cl in clusters for a in cl] + [h["id"] for h in highlights]
     ))
-    max_chars = max(floor, min(ceiling, per_theme_chars * len(clusters)))
+    max_chars = srf.derive_cap(per_theme_goal, len(clusters),
+                               int(config.get("writer_highlights_count", 8)), per_highlight_chars)
+    # item 1/2 (2026-06-22): scale the output-token budget with the cap so a larger size isn't truncated.
+    _wa_max_tokens = min(int(config.get("writer_max_output_tokens_ceiling", 8000)),
+                         max(int(config.get("whatsapp_max_tokens", 4500)), max_chars // 3 + 500))
     briefing_date = datetime.now(JST).strftime("%Y-%m-%d (%H:%M JST)")
     system_prompt = load_prompt_files()
     empty_ctx = {"interests": [], "hypotheses": [], "by_id": {}}
     user_prompt = build_user_prompt(
         clusters, highlights, sources_map, {}, empty_ctx,
-        len(cand), len(articles), briefing_date, max_chars,
+        len(cand), len(articles), briefing_date, max_chars, per_theme_target=per_theme_goal,
+        chars_per_paragraph=int(config.get("writer_chars_per_paragraph", 1000)),
     )
     msgs = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
     used = model
     print(f"  generating with {model} ({len(clusters)} themes, {len(highlights)} highlights)...")
     try:
-        resp = completion(model=model, messages=msgs, temperature=float(config.get("whatsapp_temperature", 0.3)), max_tokens=int(config.get("whatsapp_max_tokens", 4500)))
+        resp = completion(model=model, messages=msgs, temperature=float(config.get("whatsapp_temperature", 0.3)), max_tokens=_wa_max_tokens)
     except Exception as e:
         if fallback_model and fallback_model != model:
             print(f"  PRIMARY {model} failed ({e}); falling back to {fallback_model}")
             used = fallback_model
-            resp = completion(model=used, messages=msgs, temperature=float(config.get("whatsapp_temperature", 0.3)), max_tokens=int(config.get("whatsapp_max_tokens", 4500)))
+            resp = completion(model=used, messages=msgs, temperature=float(config.get("whatsapp_temperature", 0.3)), max_tokens=_wa_max_tokens)
         else:
             raise
     text = resp.choices[0].message.content.strip()
@@ -488,6 +525,9 @@ def main():
     account = reg.get("account", "wikibot")
     translate_model = reg.get("translate_model", config.get("whatsapp_translate_model", "gemini/gemini-2.5-flash-lite"))
     topic_keywords = reg.get("topic_keywords", DEFAULT_TOPIC_KEYWORDS)
+    # item 5 (2026-06-19): per-category EXCLUDE list — registry override, else the config default
+    # (the "loose" crypto/prediction-market list). {} => no exclusions (today's include-only).
+    exclude_keywords = reg.get("topic_exclude_keywords", config.get("whatsapp_topic_exclude_keywords", {}))
     deliveries = reg.get("deliveries", [])
     if not deliveries:
         print(f"No deliveries configured in {REGISTRY_PATH}")
@@ -518,20 +558,29 @@ def main():
     any_posted = False
     for d in deliveries:
         name, target, langs, cats = d["name"], d["target"], d["languages"], d["categories"]
-        length = d.get("length", default_length)
-        print(f"\n=== {name} ({d.get('kind','?')}) | cats={cats} | langs={langs} | len={length} | -> {target} ===")
+        length = d.get("length")   # None -> the whatsapp surface theme_size (item 3)
+        print(f"\n=== {name} ({d.get('kind','?')}) | cats={cats} | langs={langs} | len={length or 'default'} | -> {target} ===")
         key = (frozenset(cats), length)
         if key not in cache:
-            cache[key] = generate_brief(config, sb, cats, topic_keywords, length=length)
+            cache[key] = generate_brief(config, sb, cats, topic_keywords, length=length,
+                                        exclude_keywords=exclude_keywords)
         en, used, ids = cache[key]
         if en is None:
             print(f"  QUIET — nothing qualifies for {name}; skipping.")
             continue
-        en_full = md_to_whatsapp(en)
-        en_strip = strip_sources(en_full)
+        wa_cfg = srf.link_cfg(config, "whatsapp")
+        # item 2 (2026-06-19): the PRIMARY language carries TITLE + SOURCE only (no link/URL) —
+        # replacing the literal '[Source](url)' markdown WhatsApp can't render. Secondary languages
+        # keep today's behaviour (source list stripped from the canonical copy before translating).
+        en_full = md_to_whatsapp(srf.render_citations(en, wa_cfg, number_style="none"))
+        en_strip = strip_sources(md_to_whatsapp(en))
+        # item 7 (2026-06-22): secondary (non-primary) languages drop the source list by DEFAULT
+        # (include_sources_in_secondary_language=false = current behaviour); set true to carry
+        # TITLE+SOURCE into the secondary language(s) too. The PRIMARY (i==0) path is untouched.
+        secondary_base = en_full if config.get("include_sources_in_secondary_language", False) else en_strip
         chat_ok = True  # did EVERY send for this chat confirm a messageId?
         for i, lang in enumerate(langs):
-            base = en_full if i == 0 else en_strip
+            base = en_full if i == 0 else secondary_base
             text = base if lang == "en" else translate(config, base, lang, translate_model, sb)[0]
             with open(out_file(name, lang), "w", encoding="utf-8") as f:
                 f.write(text)
