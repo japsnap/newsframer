@@ -55,11 +55,14 @@ def per_theme_target(config, level):
         return int(_DEFAULT_SIZE_TARGETS["M"])
 
 
-def derive_cap(target, num_themes, highlights_count=0, per_highlight_chars=250):
-    """item 2: the TOTAL char cap is DERIVED, never a separate number:
-        cap = per_theme_target x #themes + highlights_count x per_highlight_chars
-    so it tracks the size level AND the theme count automatically. Pure."""
-    return int(target) * max(0, int(num_themes)) + max(0, int(highlights_count)) * max(0, int(per_highlight_chars))
+def derive_cap(target, num_themes, highlights_count=0, per_highlight_chars=250, per_theme_source_chars=0):
+    """item 2 (body-based): the TOTAL char cap is DERIVED, never a separate number. `target` is the
+    per-theme BODY (synthesis prose, EXCLUDING the Articles/source list); the per-theme source list is
+    added as its OWN allowance so the SIZE level depends on the body only:
+        cap = (body_target + per_theme_source_chars) x #themes + highlights_count x per_highlight_chars
+    Pure."""
+    return ((int(target) + max(0, int(per_theme_source_chars))) * max(0, int(num_themes))
+            + max(0, int(highlights_count)) * max(0, int(per_highlight_chars)))
 
 
 # ============================================================================

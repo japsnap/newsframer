@@ -327,7 +327,8 @@ def generate_brief(config, sb, categories, topic_keywords, length=None, exclude_
         [a["id"] for cl in clusters for a in cl] + [h["id"] for h in highlights]
     ))
     max_chars = srf.derive_cap(per_theme_goal, len(clusters),
-                               int(config.get("writer_highlights_count", 8)), per_highlight_chars)
+                               int(config.get("writer_highlights_count", 8)), per_highlight_chars,
+                               int(config.get("writer_per_theme_source_chars", 500)))
     # item 1/2 (2026-06-22): scale the output-token budget with the cap so a larger size isn't truncated.
     _wa_max_tokens = min(int(config.get("writer_max_output_tokens_ceiling", 8000)),
                          max(int(config.get("whatsapp_max_tokens", 4500)), max_chars // 3 + 500))

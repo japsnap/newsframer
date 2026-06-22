@@ -21,7 +21,7 @@ def ok(name, cond):
 
 
 CFG = {
-    "theme_size_levels": {"S": 1000, "M": 2000, "L": 4000},
+    "theme_size_levels": {"S": 800, "M": 1600, "L": 3200},   # BODY chars (excl. source list)
     "length_to_size": {"short": "S", "medium": "M", "long": "L"},
     "default_length": "medium",
     "writer_max_themes": 5, "writer_min_themes": 3, "writer_max_articles_per_theme": 6,
@@ -33,27 +33,27 @@ CFG = {
 def test_none_uses_surface_default():
     L = w.resolve_length(CFG, None)
     ok("none_size_M", L["size"] == "M")
-    ok("none_target_2000", L["per_theme_target"] == 2000)
+    ok("none_target_1600", L["per_theme_target"] == 1600)
     ok("none_themes_global", L["max_themes"] == 5)
 
 
 def test_medium_maps_to_M():
     L = w.resolve_length(CFG, "medium")
     ok("med_size_M", L["size"] == "M")
-    ok("med_target_2000", L["per_theme_target"] == 2000)
+    ok("med_target_1600", L["per_theme_target"] == 1600)
 
 
 def test_short_maps_to_S():
     L = w.resolve_length(CFG, "short")
     ok("short_size_S", L["size"] == "S")
-    ok("short_target_1000", L["per_theme_target"] == 1000)
+    ok("short_target_800", L["per_theme_target"] == 800)
     ok("short_themes_still_global", L["max_themes"] == 5)   # length no longer overrides theme count
 
 
 def test_long_maps_to_L():
     L = w.resolve_length(CFG, "long")
     ok("long_size_L", L["size"] == "L")
-    ok("long_target_4000_is_2x", L["per_theme_target"] == 4000)
+    ok("long_target_3200_is_2x", L["per_theme_target"] == 3200)
 
 
 def test_relevance_unchanged_across_lengths():
@@ -67,7 +67,7 @@ def test_surface_theme_size_when_no_length():
     cfg2 = dict(CFG)
     cfg2["surfaces"] = {"whatsapp": {"theme_size": "L"}}
     L = w.resolve_length(cfg2, None)
-    ok("surface_L_no_length", L["size"] == "L" and L["per_theme_target"] == 4000)
+    ok("surface_L_no_length", L["size"] == "L" and L["per_theme_target"] == 3200)
 
 
 def main():

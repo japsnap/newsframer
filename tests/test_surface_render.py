@@ -21,9 +21,10 @@ def ok(name, cond):
 
 # ---- config fixture mirroring the new config/models.yaml block ----
 CFG = {
-    "theme_size_levels": {"S": 1000, "M": 2000, "L": 4000},
+    "theme_size_levels": {"S": 800, "M": 1600, "L": 3200},   # BODY chars (excl. source list)
     "length_to_size": {"short": "S", "medium": "M", "long": "L"},
     "writer_per_highlight_chars": 250,
+    "writer_per_theme_source_chars": 500,
     "surfaces": {
         "telegram": {"theme_size": "M", "show_source": True, "include_link": True, "link_style": "hyperlink"},
         "whatsapp": {"theme_size": "M", "show_source": True, "include_link": False, "link_style": "hyperlink"},
@@ -47,16 +48,17 @@ def test_resolve_size_level():
 
 
 def test_per_theme_target():
-    ok("M_target", sr.per_theme_target(CFG, "M") == 2000)
-    ok("L_is_2x_M", sr.per_theme_target(CFG, "L") == 4000)
-    ok("S_is_half_M", sr.per_theme_target(CFG, "S") == 1000)
-    ok("unknown_falls_to_M", sr.per_theme_target(CFG, "XL") == 2000)
+    ok("M_target", sr.per_theme_target(CFG, "M") == 1600)        # BODY chars (excl. source list)
+    ok("L_is_2x_M_body", sr.per_theme_target(CFG, "L") == 3200)
+    ok("S_is_half_M", sr.per_theme_target(CFG, "S") == 800)
+    ok("unknown_falls_to_M", sr.per_theme_target(CFG, "XL") == 1600)
 
 
 def test_derive_cap():
-    ok("cap_formula", sr.derive_cap(2000, 8, 8, 250) == 2000 * 8 + 8 * 250)
-    ok("cap_L_theme_part_2x", sr.derive_cap(4000, 8, 0, 250) == 32000)
-    ok("cap_no_highlights", sr.derive_cap(2000, 5, 0, 250) == 10000)
+    # cap = (body_target + per_theme_source) x #themes + highlights x per_highlight
+    ok("cap_formula", sr.derive_cap(1600, 8, 8, 250, 500) == (1600 + 500) * 8 + 8 * 250)
+    ok("cap_body_scales_with_source", sr.derive_cap(3200, 8, 0, 250, 500) == (3200 + 500) * 8)
+    ok("cap_default_no_source", sr.derive_cap(1600, 5, 0, 250) == 1600 * 5)   # default source=0
 
 
 # ===== item 2: link / source rendering =====

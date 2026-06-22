@@ -360,9 +360,11 @@ def _per_theme_target_line(per_theme_target, chars_per_paragraph=1000):
         return ""
     t = int(per_theme_target)
     paras = max(1, round(t / max(1, int(chars_per_paragraph))))
-    return (f"- Per-theme DEPTH: write each theme section as {paras} paragraph(s) of multi-source "
-            f"synthesis, 3-5 sentences each (about ~{t} characters total). Match this depth — neither "
-            f"much shorter nor much longer; scale the number of paragraphs to the count given.\n")
+    return (f"- Per-theme BODY depth: write each theme's synthesis prose as {paras} substantial "
+            f"paragraph(s) of about ~{int(chars_per_paragraph)} characters each (roughly 4-5 sentences) — "
+            f"about ~{t} characters of BODY text total (the multi-source synthesis ONLY; do NOT count the "
+            f"'**Articles:**' source list, which is separate). Match this depth in EVERY theme; scale the "
+            f"number of paragraphs to the count given.\n")
 
 
 def build_user_prompt(clusters, highlights, sources_map, by_hypothesis_id, context,
@@ -769,7 +771,8 @@ def run_writer():
                 clusters[0].append(d["article"])
 
     # item 2 (2026-06-22): DERIVED total cap = per-theme target x #themes + highlights allowance.
-    max_chars = srf.derive_cap(per_theme_goal, len(clusters), highlights_count, per_highlight_chars)
+    max_chars = srf.derive_cap(per_theme_goal, len(clusters), highlights_count, per_highlight_chars,
+                               int(config.get("writer_per_theme_source_chars", 500)))
     # item 1/2: the output-token budget must scale with the cap too, or L would be truncated at the
     # old fixed limit. Derive from the cap (~3 chars/token), floored by writer_max_tokens, clamped.
     writer_max_tokens = min(int(config.get("writer_max_output_tokens_ceiling", 8000)),

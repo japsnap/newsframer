@@ -263,18 +263,22 @@ length_to_size: {short: S, medium: M, long: L}
 # an ABSOLUTE per-theme char TARGET — the writer is told to WRITE each theme to ~this length (the old
 # model only scaled a CEILING, which the LLM underfilled, so L never actually lengthened output). The
 # total char cap is DERIVED, never a separate number:
-#     cap = per_theme_target x (#themes) + writer_highlights_count x writer_per_highlight_chars
-# so it tracks S/M/L and the theme count automatically. M = today's rendered length (~2000/theme);
-# L = 2x (4000); S = 0.5x (1000). The legacy per-chat length (short/medium/long) maps short->S,
-# medium->M, long->L (one model).
-theme_size_levels: {S: 1000, M: 2000, L: 4000}
+#     cap = (body_target + writer_per_theme_source_chars) x #themes
+#           + writer_highlights_count x writer_per_highlight_chars
+# so SIZE depends on the BODY only and the source list never eats into it. The legacy per-chat length
+# (short/medium/long) maps short->S, medium->M, long->L (one model).
+theme_size_levels: {S: 800, M: 1600, L: 3200}   # BODY (synthesis prose) chars/theme, EXCLUDING the Articles list.
+                                                # S=1 / M=2 / L=4 paragraphs. Verified on Haiku's RENDERED body:
+                                                # M~1320/theme (= today's body), L~2270 = ~1.66x (Haiku writes leaner
+                                                # paragraphs at higher counts, so a clean 2.0x isn't reachable via whole
+                                                # paragraphs: 4 paras=1.66x, 5 paras=2.64x). Set L: 4000 for 5 paras (~2.6x).
+writer_per_theme_source_chars: 500         # per-theme allowance for the Articles/source list (added to the cap, NOT counted in the size)
 writer_per_highlight_chars: 250            # highlights allowance per highlight, for the derived total cap
 writer_max_output_tokens_ceiling: 8000     # item 1/2: the LLM output-token budget is DERIVED from the char
                                            #   cap (~3 chars/token) so L isn't truncated; this is the model's
                                            #   hard output ceiling (Haiku) the derivation clamps to.
-writer_chars_per_paragraph: 1000           # item 1: per-theme length is expressed to the LLM as a PARAGRAPH
-                                           #   count = round(per_theme_target / this). Calibrated to Haiku on
-                                           #   real output (M=2 paras ~2080 chars = today; L=4 ~3886 = ~1.87x).
+writer_chars_per_paragraph: 800            # item 1: per-theme BODY is expressed to the LLM as a PARAGRAPH count
+                                           #   = round(body_target / this). M=2 paras, L=4 (=2x), S=1; ~800 chars/para.
 surfaces:
   telegram:
     theme_size: M            # S | M | L
