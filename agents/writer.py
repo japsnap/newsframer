@@ -846,26 +846,41 @@ def run_writer():
     if quiet_day:
         briefing_text = QUIET_DAY_TEXT + "\n\n" + briefing_text
 
-    # Splice the deterministic Investigations section (drops always surface here,
-    # whether or not they were also woven into the main theme). No drops -> no-op.
-    briefing_text = splice_investigations(
-        briefing_text, render_investigations_section([d["render"] for d in drops])
-    )
-    # NF-C1 (§4.4): add the deterministic "What Changed" subsection (empty when off/no deltas).
-    briefing_text = seq.splice_what_changed(briefing_text, shift_section)
-    # NF-D2 (§8.2): Blindspot of the day — spliced like Investigations, fully isolated. OFF by
-    # default (blindspot_enabled=false) => brief byte-for-byte unchanged. A parse miss adds nothing.
-    if config.get("blindspot_enabled", False) and config.get("blindspot_telegram", True):
-        try:
-            import blindspot as _bsp
-            _bs_block = _bsp.build_from_config(config)
-            if _bs_block:
-                briefing_text = _bsp.splice(briefing_text, _bs_block)
-                print(f"  NF-D2: Blindspot spliced ({len(_bs_block)} chars).")
-            else:
-                print("  NF-D2: Blindspot — nothing strong today; skipped.")
-        except Exception as _be:
-            print(f"  NF-D2: Blindspot skipped (isolated): {type(_be).__name__}: {_be}")
+    # Deterministic post-pass sections, spliced in a config-driven order (default reproduces
+    # investigations -> what_changed -> blindspot exactly). Each closure threads briefing_text through.
+    def _section_investigations(text):
+        # Drops always surface here (whether or not also woven into a theme). No drops -> no-op.
+        return splice_investigations(text, render_investigations_section([d["render"] for d in drops]))
+
+    def _section_what_changed(text):
+        # NF-C1 (§4.4): the deterministic "What Changed" subsection (empty when off/no deltas).
+        return seq.splice_what_changed(text, shift_section)
+
+    def _section_blindspot(text):
+        # NF-D2 (§8.2): Blindspot of the day — spliced like Investigations, fully isolated. OFF by
+        # default (blindspot_enabled=false) => no change. A parse miss adds nothing.
+        if config.get("blindspot_enabled", False) and config.get("blindspot_telegram", True):
+            try:
+                import blindspot as _bsp
+                _bs_block = _bsp.build_from_config(config)
+                if _bs_block:
+                    text = _bsp.splice(text, _bs_block)
+                    print(f"  NF-D2: Blindspot spliced ({len(_bs_block)} chars).")
+                else:
+                    print("  NF-D2: Blindspot — nothing strong today; skipped.")
+            except Exception as _be:
+                print(f"  NF-D2: Blindspot skipped (isolated): {type(_be).__name__}: {_be}")
+        return text
+
+    _SECTION_FUNCS = {
+        "investigations": _section_investigations,
+        "what_changed": _section_what_changed,
+        "blindspot": _section_blindspot,
+    }
+    for _sec in config.get("brief_section_order", ["investigations", "what_changed", "blindspot"]):
+        _fn = _SECTION_FUNCS.get(_sec)
+        if _fn:
+            briefing_text = _fn(briefing_text)
 
     usage = getattr(response, "usage", None)
     t_in = getattr(usage, "prompt_tokens", 0) if usage else 0

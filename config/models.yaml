@@ -406,6 +406,7 @@ sequencing_enabled: true               # master switch (ON 2026-06-17; set false
 sequencing_placement: ["subsection", "inline"]  # where notes show: 'subsection' (## What Changed)
                                        #   and/or 'inline' (woven into the matching theme). Both on.
 what_changed_section_header: "## 📈 What Changed"  # heading for the sequencing 'What Changed' subsection (Telegram brief)
+brief_section_order: ["investigations", "what_changed", "blindspot"]  # order the deterministic post-pass sections are spliced into the Telegram brief
 coverage_warning_left: "_⚠ Left-leaning media only — opposing view absent._"   # one-sided-coverage note (left) the writer appends as a theme's final line (NF-NEW10c)
 coverage_warning_right: "_⚠ Right-leaning media only — opposing view absent._"  # one-sided-coverage note (right)
 quiet_day_text: "_Quiet news day — fewer items than usual._"  # prepended to a thin-day brief (Telegram + WhatsApp)
