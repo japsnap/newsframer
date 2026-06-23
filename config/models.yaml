@@ -370,6 +370,7 @@ deduplicator_similarity_threshold: 0.85
 deduplicator_window_hours: 48
 deduplicator_price_event_window_hours: 12
 deduplicator_high_similarity_threshold: 0.90
+deduplicator_price_event_keywords: ["price", "hits", "drops", "surges", "soars", "plunge", "plunges", "rally", "rallies", "recovers", "breaches", "tests", "slumps", "crashes", "breakout", "bottoms", "tops", "all-time high", "ath", "%", "$", "btc", "bitcoin", "eth", "ethereum", "sol", "election", "ceasefire", "ruling", "verdict", "shutdown"]  # a cluster resolves to price_event if a member title/topic carries one of these
 
 # --- Title-dedup (NF-NEW10): collapse same-story wire pile-ups BEFORE the analyst ---
 # Reuses the deduplicator's clusters (cluster_id); for each still-alive multi-member

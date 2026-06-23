@@ -61,13 +61,13 @@ def get_supabase():
 
 
 # Keywords that indicate volatile / time-sensitive content where latest wins
-PRICE_EVENT_KEYWORDS = [
+PRICE_EVENT_KEYWORDS = list(_CFG.get("deduplicator_price_event_keywords", [
     "price", "hits", "drops", "surges", "soars", "plunge", "plunges",
     "rally", "rallies", "recovers", "breaches", "tests", "slumps",
     "crashes", "breakout", "bottoms", "tops", "all-time high", "ath",
     "%", "$", "btc", "bitcoin", "eth", "ethereum", "sol",
     "election", "ceasefire", "ruling", "verdict", "shutdown",
-]
+]))
 
 
 def fetch_articles(sb, window_hours):
