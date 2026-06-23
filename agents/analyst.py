@@ -60,6 +60,8 @@ BREAKING_SIGNALS = tuple(_CFG.get("analyst_breaking_keywords", ("breaking", "jus
 ACTIONABILITY_REL_THRESHOLD = int(_CFG.get("analyst_actionability_rel_threshold", 8))
 BREAKING_ACTIONABILITY_REL_THRESHOLD = int(_CFG.get("analyst_breaking_actionability_rel_threshold", 7))
 PERSPECTIVE_REL_THRESHOLD = int(_CFG.get("analyst_perspective_rel_threshold", 7))
+TOPIC_MAX_CHARS = int(_CFG.get("analyst_topic_max_chars", 40))
+MAX_TOPICS = int(_CFG.get("analyst_max_topics", 8))
 
 
 def load_analyst_prompt():
@@ -285,7 +287,7 @@ def validate_and_clean(parsed, hypothesis_ids, article):
     topics = parsed.get("topics") or []
     if not isinstance(topics, list):
         topics = []
-    topics = [str(t).lower()[:40] for t in topics if t][:8]
+    topics = [str(t).lower()[:TOPIC_MAX_CHARS] for t in topics if t][:MAX_TOPICS]
 
     act = parsed.get("actionability")
     if not isinstance(act, int) or not (0 <= act <= 3):

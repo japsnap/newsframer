@@ -189,6 +189,8 @@ analyst_breaking_keywords: ["breaking", "just in", "alert", "urgent", "live:"]  
 analyst_actionability_rel_threshold: 8           # rel >= this + IMMEDIATE branch -> actionability bumped to 2
 analyst_breaking_actionability_rel_threshold: 7  # rel >= this + a breaking keyword -> actionability bumped to 2
 analyst_perspective_rel_threshold: 7             # rel >= this -> perspective_invited defaults true for signal/hypothesis labels
+analyst_topic_max_chars: 40                      # max chars kept per analyst topic string (validate_and_clean)
+analyst_max_topics: 8                            # max topics kept per article
 drop_report_short_max_chars: 400
 drop_report_long_max_chars: 2000
 
