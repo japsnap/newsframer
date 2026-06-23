@@ -12,10 +12,25 @@ miss yields NOTHING (the line is simply skipped), never a crash.
     venv\\Scripts\\python.exe agents/blindspot.py            # dry run: fetch + print the pick
     venv\\Scripts\\python.exe tests\\test_blindspot.py
 """
+import os
 import re
 
-BASE_URL = "https://ground.news"
-DEFAULT_URL = "https://ground.news/blindspot"
+import yaml
+
+
+def _load_config():
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(base_dir, "config", "models.yaml"), "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+try:  # wrapped so a missing/broken config can't break import
+    _CFG = _load_config() or {}
+except Exception:
+    _CFG = {}
+
+BASE_URL = str(_CFG.get("blindspot_base_url", "https://ground.news"))
+DEFAULT_URL = BASE_URL + "/blindspot"
 
 # "... Blindspot: Only 13% Left 11 sources US denied Israel's request ..." ->
 #   pct=13  side=Left  sources=11  headline="US denied Israel's request ..."

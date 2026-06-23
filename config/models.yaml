@@ -256,6 +256,7 @@ blindspot_enabled: true                 # ON 2026-06-17 (both channels); set fal
 blindspot_telegram: true                # include in the 06:00 Telegram brief (when enabled)
 blindspot_whatsapp: true                # include in the 11:00 WhatsApp dispatch (when enabled)
 blindspot_url: "https://ground.news/blindspot"
+blindspot_base_url: "https://ground.news"  # domain root used to absolutize relative article links (blindspot._abs_url)
 blindspot_header: "🔦 *Blindspot of the Day*"
 blindspot_max_items: 1                  # max stories/day (spec §8.2: max 1)
 blindspot_min_sources: 5                # skip "thin" stories with fewer sources (spec §8.2)
