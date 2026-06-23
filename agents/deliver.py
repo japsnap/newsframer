@@ -30,6 +30,7 @@ def _load_cfg():
 
 # Sourced from config (default reproduces prior behaviour). Telegram hard cap is 4096.
 TELEGRAM_LIMIT = int(_load_cfg().get("telegram_message_limit", 3800))
+GATEWAY_SEND_TIMEOUT = int(_load_cfg().get("gateway_send_timeout_seconds", 120))
 
 
 # --- pure: send confirmation + the record/alert decision -------------------
@@ -122,7 +123,7 @@ def _openclaw_mjs():
     )
 
 
-def gateway_send(channel, account, target, message, timeout=120):
+def gateway_send(channel, account, target, message, timeout=GATEWAY_SEND_TIMEOUT):
     """Send one message via the gateway subprocess (the path that returns real
     message IDs). Returns the messageId string on success, else None."""
     cmd = ["node", _openclaw_mjs(), "message", "send", "--channel", channel,
