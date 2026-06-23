@@ -45,6 +45,13 @@ def load_config():
     with open(config_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
+
+try:  # module-level read for the helpers that don't receive `config` (wrapped -> defaults)
+    _CFG = load_config() or {}
+except Exception:
+    _CFG = {}
+PR_KEYWORDS = list(_CFG.get("fetcher_pr_keywords", ["sponsored", "partner", "press release", "advertorial", "paid post"]))
+
 # --- Supabase ---
 def get_supabase():
     return create_client(
@@ -106,8 +113,7 @@ def fetch_one(config, source, is_first_run, today_jst, limit):
 
 def is_pr_article(title: str, source: dict) -> bool:
     if source.get("notes") and "Avoid PR articles" in source["notes"]:
-        pr_keywords = ["sponsored", "partner", "press release", "advertorial", "paid post"]
-        return any(kw in title.lower() for kw in pr_keywords)
+        return any(kw in title.lower() for kw in PR_KEYWORDS)
     return False
 
 def load_junk_patterns(sb):
