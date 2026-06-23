@@ -57,6 +57,9 @@ RETRY_BACKOFF_SECONDS = float(_CFG.get("analyst_retry_backoff_seconds", 2))
 REASONING_MAX_CHARS = int(_CFG.get("analyst_reasoning_max_chars", 500))
 DIFFERENTIATOR_MAX_CHARS = int(_CFG.get("analyst_differentiator_max_chars", 300))
 BREAKING_SIGNALS = tuple(_CFG.get("analyst_breaking_keywords", ("breaking", "just in", "alert", "urgent", "live:")))
+ACTIONABILITY_REL_THRESHOLD = int(_CFG.get("analyst_actionability_rel_threshold", 8))
+BREAKING_ACTIONABILITY_REL_THRESHOLD = int(_CFG.get("analyst_breaking_actionability_rel_threshold", 7))
+PERSPECTIVE_REL_THRESHOLD = int(_CFG.get("analyst_perspective_rel_threshold", 7))
 
 
 def load_analyst_prompt():
@@ -292,14 +295,14 @@ def validate_and_clean(parsed, hypothesis_ids, article):
     branch = article.get("branch")
     has_breaking_kw = any(kw in title for kw in BREAKING_SIGNALS)
 
-    if rel >= 8 and branch == "IMMEDIATE" and act < 2:
+    if rel >= ACTIONABILITY_REL_THRESHOLD and branch == "IMMEDIATE" and act < 2:
         act = 2
-    if has_breaking_kw and rel >= 7 and act < 2:
+    if has_breaking_kw and rel >= BREAKING_ACTIONABILITY_REL_THRESHOLD and act < 2:
         act = 2
 
     pi = parsed.get("perspective_invited")
     if not isinstance(pi, bool):
-        pi = (rel >= 7 and label in {"NEW_SIGNAL", "CONFIRMS_HYPOTHESIS", "CHALLENGES_HYPOTHESIS"})
+        pi = (rel >= PERSPECTIVE_REL_THRESHOLD and label in {"NEW_SIGNAL", "CONFIRMS_HYPOTHESIS", "CHALLENGES_HYPOTHESIS"})
 
     reasoning = str(parsed.get("reasoning", ""))[:REASONING_MAX_CHARS]
     differentiator = str(parsed.get("differentiator", ""))[:DIFFERENTIATOR_MAX_CHARS]
