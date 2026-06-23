@@ -435,14 +435,14 @@ def _log_writer_skip(sb, reason, total_in_window):
 
 
 # --- Drop-reports (spec 8.5, basic). Telegram-self path only; WhatsApp untouched. ---
-DROP_SUMMARY_SYSTEM = (
+DROP_SUMMARY_SYSTEM = str(_CFG.get("drop_summary_system_prompt", (
     "You summarize an investigative-journalism / OSINT report for a personal news brief.\n"
     'Return ONLY a JSON object: {"short": "...", "long": "..."}.\n'
     "- short: ONE factual sentence, <= 280 characters, no hype, no speculation.\n"
     "- long: 2-4 short paragraphs, <= 1200 characters: what the investigation found, the "
     "method/evidence, who is involved, and why it matters.\n"
     "Use ONLY facts in the provided article. No markdown fences, no commentary outside the JSON."
-)
+)))
 
 
 def load_investigative_ids(sb):

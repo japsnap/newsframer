@@ -408,6 +408,23 @@ what_changed_section_header: "## 📈 What Changed"  # heading for the sequencin
 coverage_warning_left: "_⚠ Left-leaning media only — opposing view absent._"   # one-sided-coverage note (left) the writer appends as a theme's final line (NF-NEW10c)
 coverage_warning_right: "_⚠ Right-leaning media only — opposing view absent._"  # one-sided-coverage note (right)
 quiet_day_text: "_Quiet news day — fewer items than usual._"  # prepended to a thin-day brief (Telegram + WhatsApp)
+# Investigative drop short+long summary system prompt (writer.py DROP_SUMMARY_SYSTEM)
+drop_summary_system_prompt: |-
+  You summarize an investigative-journalism / OSINT report for a personal news brief.
+  Return ONLY a JSON object: {"short": "...", "long": "..."}.
+  - short: ONE factual sentence, <= 280 characters, no hype, no speculation.
+  - long: 2-4 short paragraphs, <= 1200 characters: what the investigation found, the method/evidence, who is involved, and why it matters.
+  Use ONLY facts in the provided article. No markdown fences, no commentary outside the JSON.
+# Sequencing structured-fact extraction system prompt (thread_tracker.py EXTRACT_SYSTEM)
+sequencing_extract_system_prompt: |-
+  You extract ONE structured, factual data point from news article text about a single ongoing story, for day-over-day change tracking. Return ONLY a JSON object:
+  {"delta_type": "...", "value": "...", "unit": "...", "short_fact": "...", "confidence": 0.0}
+  - delta_type: one of magnitude, cumulative, status, reversal, scope, attribution, forecast — the KIND of fact most central to this story's progression.
+  - value: the current value. A NUMBER (as a string is fine) for magnitude/cumulative/forecast (e.g. '47', '$5M', '20000'); a SHORT label for status/reversal/scope/attribution (e.g. 'passed committee', 'arson', 'Gaza+Lebanon').
+  - unit: e.g. 'dead', 'acres', 'USD', '%', or '' if none.
+  - short_fact: <=80 chars, the bare fact (e.g. 'death toll 47').
+  - confidence: 0..1 that this value is stated (not inferred) in the text.
+  Use ONLY facts present in the text. If no trackable hard fact, return value ''. No prose.
 sequencing_model: "gemini/gemini-2.5-flash-lite"  # Stage A structured-fact extraction (cheapest)
 sequencing_temperature: 0              # deterministic extraction
 sequencing_max_tokens: 200             # one small JSON fact per story

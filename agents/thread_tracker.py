@@ -301,7 +301,7 @@ def splice_what_changed(briefing_text, section):
 # Stage A — structured fact extraction (cheap model)
 # =====================================================================================
 
-EXTRACT_SYSTEM = (
+EXTRACT_SYSTEM = str(_CFG.get("sequencing_extract_system_prompt", (
     "You extract ONE structured, factual data point from news article text about a single ongoing "
     "story, for day-over-day change tracking. Return ONLY a JSON object:\n"
     '{"delta_type": "...", "value": "...", "unit": "...", "short_fact": "...", "confidence": 0.0}\n'
@@ -314,7 +314,7 @@ EXTRACT_SYSTEM = (
     "- short_fact: <=80 chars, the bare fact (e.g. 'death toll 47').\n"
     "- confidence: 0..1 that this value is stated (not inferred) in the text.\n"
     "Use ONLY facts present in the text. If no trackable hard fact, return value ''. No prose."
-)
+)))
 
 
 def build_extract_prompt(label, article_texts, max_chars=1200):
