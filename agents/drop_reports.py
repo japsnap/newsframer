@@ -30,8 +30,8 @@ except Exception:
     _CFG = {}
 
 INVESTIGATIONS_HEADER = str(_CFG.get("investigations_section_header", "## 🔍 Investigations"))
-_SLUG_MAX = 40
-_SLUG_WORDS = 4
+_SLUG_MAX = int(_CFG.get("drop_slug_max_chars", 40))
+_SLUG_WORDS = int(_CFG.get("drop_slug_max_words", 4))
 
 
 def make_slug(title, existing=None):

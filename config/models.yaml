@@ -133,6 +133,8 @@ drop_report_max_per_source: 1      # NF-NEW3: max drops from any ONE source per 
 drop_report_model: "gemini/gemini-2.5-flash-lite"  # cheap model for the short+long drop summaries
 investigations_section_header: "## 🔍 Investigations"  # heading for the Investigations drop section (Telegram brief)
 drop_report_reply_trigger: "more:"  # reply prefix that requests a drop's long write-up (get_drop_report.normalize_slug)
+drop_slug_max_chars: 40             # make_slug: max chars in a drop's reply slug
+drop_slug_max_words: 4              # make_slug: max words used to build the slug
 
 # Per-bundle theme floors (spec §8.1/§8.6) — Telegram brief only. Guarantees each ACTIVE bundle
 # (a source category with >=1 qualifying in-window article) a minimum presence in the OUTPUT, so a
