@@ -34,13 +34,30 @@ import json
 import argparse
 from datetime import datetime, timezone, timedelta
 
+import yaml
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from deduplicator import parse_embedding, cosine_similarity  # noqa: E402  (pure; reuse vectors)
 from llm_json import parse_json_obj  # noqa: E402  (tolerant LLM-JSON parse)
 
 JST = timezone(timedelta(hours=9))
 
-WHAT_CHANGED_HEADING = "## 📈 What Changed"
+
+def _load_config():
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(base_dir, "config", "models.yaml"), "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+# Module-level config read, wrapped so a missing/broken config can't break import
+# (falls back to the literal default below, reproducing prior behaviour). Reads the
+# yaml directly to avoid a circular import with writer (which imports this module).
+try:
+    _CFG = _load_config() or {}
+except Exception:
+    _CFG = {}
+
+WHAT_CHANGED_HEADING = str(_CFG.get("what_changed_section_header", "## 📈 What Changed"))
 NUMERIC_TYPES = ("magnitude", "cumulative", "forecast")
 CATEGORICAL_TYPES = ("status", "reversal", "scope", "attribution")
 ALL_DELTA_TYPES = NUMERIC_TYPES + CATEGORICAL_TYPES

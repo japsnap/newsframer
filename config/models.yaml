@@ -383,6 +383,7 @@ title_dedup_max_keep: 5                # NF-NEW10 v3: keep up to N articles per 
 sequencing_enabled: true               # master switch (ON 2026-06-17; set false to revert instantly)
 sequencing_placement: ["subsection", "inline"]  # where notes show: 'subsection' (## What Changed)
                                        #   and/or 'inline' (woven into the matching theme). Both on.
+what_changed_section_header: "## 📈 What Changed"  # heading for the sequencing 'What Changed' subsection (Telegram brief)
 sequencing_model: "gemini/gemini-2.5-flash-lite"  # Stage A structured-fact extraction (cheapest)
 sequencing_temperature: 0              # deterministic extraction
 sequencing_max_tokens: 200             # one small JSON fact per story
