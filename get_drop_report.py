@@ -18,6 +18,8 @@ import json
 import glob
 import argparse
 
+import yaml
+
 try:  # titles/summaries can contain non-latin glyphs; don't crash the console.
     sys.stdout.reconfigure(encoding="utf-8")
 except Exception:
@@ -25,6 +27,19 @@ except Exception:
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 STORE = os.path.join(BASE, "data", "drop_reports")
+
+
+def _load_config():
+    with open(os.path.join(BASE, "config", "models.yaml"), "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+try:  # wrapped so a missing/broken config can't break this CLI helper
+    _CFG = _load_config() or {}
+except Exception:
+    _CFG = {}
+
+REPLY_TRIGGER = str(_CFG.get("drop_report_reply_trigger", "more:"))
 
 
 def _store_files(date=None, days_back=10):
@@ -42,8 +57,9 @@ def _read(path):
 
 def normalize_slug(s):
     s = (s or "").strip().lower()
-    if s.startswith("more:"):
-        s = s[len("more:"):].strip()
+    _trig = REPLY_TRIGGER.lower()
+    if _trig and s.startswith(_trig):
+        s = s[len(_trig):].strip()
     return s
 
 
