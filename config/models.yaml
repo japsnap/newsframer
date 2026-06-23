@@ -355,6 +355,7 @@ analyst_weight_mild_points: 1           # |weight|=1 => push relevance ~1 point
 # agent_runs row into execution_log, best-effort + fully isolated (NEVER in the critical path). Additive —
 # agent_runs is untouched. false => skip the mirror entirely (agent_runs-only, as before).
 exec_log_enabled: true
+project_name: newsframer          # project label written to each execution_log row (run_log.build_exec_row)
 
 # --- Delivery ---
 telegram_message_limit: 3800       # per-message char cap (Telegram hard cap is 4096)

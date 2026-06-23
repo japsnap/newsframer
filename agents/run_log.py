@@ -60,8 +60,20 @@ def mirror_execution_log(sb, payload, trace_id=None, task_type=None, enabled=Non
         return False
     trace_id = trace_id or os.environ.get("NEWSFRAMER_TRACE_ID") or f"solo-{payload.get('agent_name', '?')}"
     task_type = task_type or os.environ.get("NEWSFRAMER_TASK_TYPE", "brief")
-    sb.table("execution_log").insert(build_exec_row(payload, trace_id, task_type)).execute()
+    sb.table("execution_log").insert(build_exec_row(payload, trace_id, task_type, _project_name())).execute()
     return True
+
+
+def _project_name():
+    """Read project_name from config/models.yaml (default 'newsframer'). Wrapped — a missing/broken
+    config never breaks logging."""
+    try:
+        import yaml
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(base, "config", "models.yaml"), encoding="utf-8") as f:
+            return str((yaml.safe_load(f) or {}).get("project_name", "newsframer"))
+    except Exception:
+        return "newsframer"
 
 
 def _exec_log_enabled():
