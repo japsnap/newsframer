@@ -53,6 +53,8 @@ except Exception:
 PR_KEYWORDS = list(_CFG.get("fetcher_pr_keywords", ["sponsored", "partner", "press release", "advertorial", "paid post"]))
 SCRAPE_TIMEOUT = int(_CFG.get("fetcher_scrape_timeout_seconds", 10))
 JST = timezone(timedelta(hours=int(_CFG.get("operator_tz_offset_hours", 9))))  # §8.7 scrape calendar / dates (operator tz)
+MIN_URL_LENGTH = int(_CFG.get("fetcher_min_url_length", 30))
+MIN_TITLE_LENGTH = int(_CFG.get("fetcher_min_title_length", 15))
 
 # --- Supabase ---
 def get_supabase():
@@ -130,7 +132,7 @@ def is_junk_url(url: str, title: str, patterns: list = None) -> bool:
     """Filter out non-article URLs"""
     if not url or not title:
         return True
-    if len(url) < 30 or len(title) < 15:
+    if len(url) < MIN_URL_LENGTH or len(title) < MIN_TITLE_LENGTH:
         return True
     if not url.startswith("http"):
         return True
