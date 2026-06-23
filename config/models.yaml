@@ -91,6 +91,11 @@ whatsapp_fresh_hours: 6        # an article published within this many hours cou
                                #   genuinely new story surfaces even if borderline (NF-C2 weight-fresh-higher).
 whatsapp_send_timeout_seconds: 120      # per-message gateway send timeout (openclaw message send)
 whatsapp_gap_stage_timeout_seconds: 1800  # per-stage timeout for each gap-refresh engine subprocess
+language_labels:                # display labels per language code (WhatsApp "sources in <lang>" / translation header)
+  ur: "Urdu (Urdu script)"
+  ar: "Arabic"
+  hi: "Hindi"
+  en: "English"
 
 # --- Daily cost report (NF-14) — to the operator's Telegram, AFTER the 11:00 WhatsApp dispatch ---
 # Once the WhatsApp brief reaches the group + Muda, send the operator a cost rollup for the day: the

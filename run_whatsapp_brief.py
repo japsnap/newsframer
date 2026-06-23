@@ -47,7 +47,11 @@ OPENCLAW_MJS = os.environ.get(
 )
 TMP = os.environ.get("TEMP", BASE)
 REGISTRY_PATH = os.path.join(BASE, "config", "whatsapp_deliveries.yaml")
-LANG_LABELS = {"ur": "Urdu (Urdu script)", "ar": "Arabic", "hi": "Hindi", "en": "English"}
+_DEFAULT_LANG_LABELS = {"ur": "Urdu (Urdu script)", "ar": "Arabic", "hi": "Hindi", "en": "English"}
+try:  # wrapped so a missing/broken config falls back to the defaults, never breaks import
+    LANG_LABELS = dict(load_config().get("language_labels") or _DEFAULT_LANG_LABELS)
+except Exception:
+    LANG_LABELS = _DEFAULT_LANG_LABELS
 DEFAULT_TOPIC_KEYWORDS = {
     # NF-E5: broadened so genuinely geopolitical stories whose analyst topics use
     # rights / authoritarianism / migration language are no longer dropped. The
