@@ -68,6 +68,8 @@ DROP_TEMPERATURE = float(_CFG.get("drop_report_temperature", 0.2))
 DROP_MAX_TOKENS = int(_CFG.get("drop_report_max_tokens", 900))
 DROP_SHORT_MAX_CHARS = int(_CFG.get("drop_report_short_max_chars", 400))
 DROP_LONG_MAX_CHARS = int(_CFG.get("drop_report_long_max_chars", 2000))
+COVERAGE_WARNING_LEFT = str(_CFG.get("coverage_warning_left", "_⚠ Left-leaning media only — opposing view absent._"))
+COVERAGE_WARNING_RIGHT = str(_CFG.get("coverage_warning_right", "_⚠ Right-leaning media only — opposing view absent._"))
 
 
 def load_prompt_files():
@@ -391,9 +393,9 @@ def build_user_prompt(clusters, highlights, sources_map, by_hypothesis_id, conte
         f"- If highlights count is 0, OMIT the ## Highlights section entirely.\n"
         f"- One-sided coverage (NF-NEW10c): if a cluster header is marked "
         f"'[ONE-SIDED COVERAGE: left]', make the FINAL line of that theme's section exactly "
-        f"'_⚠ Left-leaning media only — opposing view absent._'; for "
+        f"'{COVERAGE_WARNING_LEFT}'; for "
         f"'[ONE-SIDED COVERAGE: right]' use "
-        f"'_⚠ Right-leaning media only — opposing view absent._'. Add nothing for "
+        f"'{COVERAGE_WARNING_RIGHT}'. Add nothing for "
         f"clusters without that marker.\n"
         f"- Output ONLY the Markdown briefing. No preamble, no postamble.\n"
     )
