@@ -10,13 +10,31 @@ delivery until deliberately enabled.
 
     venv\\Scripts\\python.exe tests\\test_critic.py
 """
+import os
 import re
 
-CRITICAL, IMPORTANT, MINOR = "Critical", "Important", "Minor"
+import yaml
+
+
+def _load_config():
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(base_dir, "config", "models.yaml"), "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+try:  # wrapped so a missing/broken config can't break import
+    _CFG = _load_config() or {}
+except Exception:
+    _CFG = {}
+
+_SEV = list(_CFG.get("critic_severity_labels", ["Critical", "Important", "Minor"]))
+if len(_SEV) != 3:  # malformed override -> fall back to the defaults
+    _SEV = ["Critical", "Important", "Minor"]
+CRITICAL, IMPORTANT, MINOR = _SEV[0], _SEV[1], _SEV[2]
 _ORDER = {CRITICAL: 3, IMPORTANT: 2, MINOR: 1}
 
 # '## ' headings that are not themes, so the theme-count check stays fair.
-_NON_THEME = ("highlights", "investigations")
+_NON_THEME = tuple(_CFG.get("critic_non_theme_sections", ("highlights", "investigations")))
 _LINK = re.compile(r"\]\(https?://")        # a markdown [text](http...) citation
 _H2 = re.compile(r"^##\s+(.*)$", re.MULTILINE)
 

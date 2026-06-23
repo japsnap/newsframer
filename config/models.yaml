@@ -265,6 +265,8 @@ blindspot_fetch_timeout: 25             # HTTP timeout (seconds)
 # NEVER edits or blocks the send. OFF by default => delivery byte-for-byte unchanged.
 critic_enabled: true                    # ON 2026-06-18 (report-only, never blocks); false to revert
 critic_alert_min_severity: "Important"  # only ping when a finding is at/above this (Critical|Important|Minor)
+critic_severity_labels: ["Critical", "Important", "Minor"]  # severity tier labels, highest-first (exactly 3)
+critic_non_theme_sections: ["highlights", "investigations"]  # lowercase '## ' headings NOT counted as themes (thin-theme check)
 # critic_min_themes / critic_overrun_warn_ratio fall back to the writer_* values when unset.
 
 # --- Length levels (NF-E2 / §6) — per-WhatsApp-chat brief length (short / medium / long) ---
