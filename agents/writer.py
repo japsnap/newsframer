@@ -718,7 +718,9 @@ def run_writer():
         _bias_rows = sb.table("sources").select("id, groundnews_publication_bias").execute().data or []
         _bias_of = {r["id"]: r.get("groundnews_publication_bias") for r in _bias_rows}
         for _i, _c in enumerate(clusters, 1):
-            _w = skew_warning([(a.get("source_id"), _bias_of.get(a.get("source_id"))) for a in _c])
+            _w = skew_warning([(a.get("source_id"), _bias_of.get(a.get("source_id"))) for a in _c],
+                              min_sources=int(config.get("source_skew_min_sources", 3)),
+                              skew_ratio=float(config.get("source_skew_ratio", 0.75)))
             if _w:
                 print(f"  ⚠ THEME {_i} SOURCE-SKEW: {_w}")
     except Exception as _e:

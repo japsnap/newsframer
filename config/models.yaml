@@ -410,6 +410,8 @@ sequencing_placement: ["subsection", "inline"]  # where notes show: 'subsection'
                                        #   and/or 'inline' (woven into the matching theme). Both on.
 what_changed_section_header: "## 📈 What Changed"  # heading for the sequencing 'What Changed' subsection (Telegram brief)
 brief_section_order: ["investigations", "what_changed", "blindspot"]  # order the deterministic post-pass sections are spliced into the Telegram brief
+source_skew_min_sources: 3      # NF-D3/§8.2: min DISTINCT placed-bias sources before a theme can be flagged source-skewed
+source_skew_ratio: 0.75         # one lean must be >= this share of placed sources (opposing lean absent) to warn
 coverage_warning_left: "_⚠ Left-leaning media only — opposing view absent._"   # one-sided-coverage note (left) the writer appends as a theme's final line (NF-NEW10c)
 coverage_warning_right: "_⚠ Right-leaning media only — opposing view absent._"  # one-sided-coverage note (right)
 quiet_day_text: "_Quiet news day — fewer items than usual._"  # prepended to a thin-day brief (Telegram + WhatsApp)
