@@ -10,9 +10,26 @@ This module holds only the deterministic, side-effect-free pieces so they can be
 unit-tested without a DB or LLM. DB selection, LLM summary generation, and
 persistence live in writer.py (Telegram-self path only) and the JSON store.
 """
+import os
 import re
 
-INVESTIGATIONS_HEADER = "## 🔍 Investigations"
+import yaml
+
+
+def _load_config():
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(base_dir, "config", "models.yaml"), "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+# Module-level config read, wrapped so a missing/broken config can't break import
+# (falls back to the literal default below, reproducing prior behaviour).
+try:
+    _CFG = _load_config() or {}
+except Exception:
+    _CFG = {}
+
+INVESTIGATIONS_HEADER = str(_CFG.get("investigations_section_header", "## 🔍 Investigations"))
 _SLUG_MAX = 40
 _SLUG_WORDS = 4
 
