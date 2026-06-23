@@ -110,6 +110,9 @@ whatsapp_translate_system_prompt: "You are a professional translator. Translate 
 # later just works — nothing is hard-coded to a fixed number of groups. Reads the execution_log.
 cost_report_enabled: true
 cost_report_cap_usd: 2.0        # the daily disaster cap, shown as a "% of cap" line (not a limiter)
+cost_report_task_labels:        # task_type bucket -> friendly label in the daily cost report
+  brief: "📲 Telegram brief"
+  whatsapp_brief: "💬 WhatsApp"
 
 # Writer settings
 writer_model: "anthropic/claude-haiku-4-5"

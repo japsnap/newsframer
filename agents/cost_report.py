@@ -15,18 +15,19 @@ from datetime import datetime, timezone, timedelta
 import yaml
 
 
-def _tz_offset():
+def _load_cfg():
     try:
         base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         with open(os.path.join(base, "config", "models.yaml"), encoding="utf-8") as f:
-            return int((yaml.safe_load(f) or {}).get("operator_tz_offset_hours", 9))
+            return yaml.safe_load(f) or {}
     except Exception:
-        return 9
+        return {}
 
 
-JST = timezone(timedelta(hours=_tz_offset()))
+_CFG = _load_cfg()
+JST = timezone(timedelta(hours=int(_CFG.get("operator_tz_offset_hours", 9))))
 # Friendly labels for the task_type buckets; unknown types fall through with their raw name.
-_TASK_LABELS = {"brief": "📲 Telegram brief", "whatsapp_brief": "💬 WhatsApp"}
+_TASK_LABELS = dict(_CFG.get("cost_report_task_labels", {"brief": "📲 Telegram brief", "whatsapp_brief": "💬 WhatsApp"}))
 
 
 def jst_day_bounds(now_utc):
