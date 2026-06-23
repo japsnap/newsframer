@@ -56,6 +56,7 @@ MAX_RETRIES = int(_CFG.get("analyst_max_retries", 3))
 RETRY_BACKOFF_SECONDS = float(_CFG.get("analyst_retry_backoff_seconds", 2))
 REASONING_MAX_CHARS = int(_CFG.get("analyst_reasoning_max_chars", 500))
 DIFFERENTIATOR_MAX_CHARS = int(_CFG.get("analyst_differentiator_max_chars", 300))
+BREAKING_SIGNALS = tuple(_CFG.get("analyst_breaking_keywords", ("breaking", "just in", "alert", "urgent", "live:")))
 
 
 def load_analyst_prompt():
@@ -289,8 +290,7 @@ def validate_and_clean(parsed, hypothesis_ids, article):
 
     title = (article.get("title") or "").lower()
     branch = article.get("branch")
-    breaking_signals = ("breaking", "just in", "alert", "urgent", "live:")
-    has_breaking_kw = any(kw in title for kw in breaking_signals)
+    has_breaking_kw = any(kw in title for kw in BREAKING_SIGNALS)
 
     if rel >= 8 and branch == "IMMEDIATE" and act < 2:
         act = 2

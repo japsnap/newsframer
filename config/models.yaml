@@ -185,6 +185,7 @@ analyst_max_retries: 3
 analyst_retry_backoff_seconds: 2
 analyst_reasoning_max_chars: 500
 analyst_differentiator_max_chars: 300
+analyst_breaking_keywords: ["breaking", "just in", "alert", "urgent", "live:"]  # title keywords that bump actionability (validate_and_clean)
 drop_report_short_max_chars: 400
 drop_report_long_max_chars: 2000
 
