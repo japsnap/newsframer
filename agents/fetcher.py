@@ -51,6 +51,7 @@ try:  # module-level read for the helpers that don't receive `config` (wrapped -
 except Exception:
     _CFG = {}
 PR_KEYWORDS = list(_CFG.get("fetcher_pr_keywords", ["sponsored", "partner", "press release", "advertorial", "paid post"]))
+SCRAPE_TIMEOUT = int(_CFG.get("fetcher_scrape_timeout_seconds", 10))
 
 # --- Supabase ---
 def get_supabase():
@@ -207,7 +208,7 @@ def fetch_web(source: dict, cutoff: datetime, max_articles: int) -> list:
     articles = []
     try:
         headers = {"User-Agent": "Mozilla/5.0 (compatible; OpenClaw/1.0)"}
-        resp = requests.get(source["site_url"], headers=headers, timeout=10)
+        resp = requests.get(source["site_url"], headers=headers, timeout=SCRAPE_TIMEOUT)
         soup = BeautifulSoup(resp.text, "html.parser")
 
         links = []

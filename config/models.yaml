@@ -35,6 +35,7 @@ deduplicator_embedding_breaker_threshold: 3   # consecutive embedding failures -
 fetch_hours_back: 24
 first_run_hours_back: 48
 fetcher_pr_keywords: ["sponsored", "partner", "press release", "advertorial", "paid post"]  # title keywords marking a PR/advertorial item (is_pr_article; only for sources whose notes say "Avoid PR articles")
+fetcher_scrape_timeout_seconds: 10  # HTTP timeout for the BeautifulSoup scrape path (fetch_web)
 max_articles_total: 250   # SUPERSEDED: order-based truncation removed (it starved later/newer sources). Kept for reference only; not read by the fetcher.
 fetch_safety_ceiling: 3000  # pure runaway guard: only if a run exceeds this do we cut, and then RANDOMLY
                             #   across ALL articles (never by source order), so no source is starved.
