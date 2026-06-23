@@ -46,8 +46,8 @@ except Exception:
     pass
 
 # Asia/Tokyo (JST = UTC+9, no DST). The brief date/header must be JST, not UTC: a 06:00 JST
-# run is 21:00 UTC the prior day, so a UTC date would show YESTERDAY.
-JST = timezone(timedelta(hours=9))
+# run is 21:00 UTC the prior day, so a UTC date would show YESTERDAY. The offset is config-driven
+# (operator_tz_offset_hours) — JST is defined just after _CFG loads, below.
 
 
 def load_config():
@@ -61,6 +61,7 @@ try:
     _CFG = load_config()
 except Exception:
     _CFG = {}
+JST = timezone(timedelta(hours=int(_CFG.get("operator_tz_offset_hours", 9))))
 THEME_SNIPPET_CHARS = int(_CFG.get("writer_theme_snippet_chars", 600))
 HIGHLIGHT_SNIPPET_CHARS = int(_CFG.get("writer_highlight_snippet_chars", 400))
 DROP_CONTENT_CHARS = int(_CFG.get("drop_report_content_chars", 3000))

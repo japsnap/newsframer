@@ -52,7 +52,7 @@ def _load_cfg():
         return {}
 
 
-JST = timezone(timedelta(hours=9))
+JST = timezone(timedelta(hours=int(_load_cfg().get("operator_tz_offset_hours", 9))))
 ENGINES = {"fetcher", "classifier", "deduplicator", "analyst", "writer"}
 # JST start hour per slot — sourced from config (default reproduces prior behaviour).
 SLOT_HOUR = _load_cfg().get("slot_hours") or {"telegram": 6, "whatsapp": 11}

@@ -40,8 +40,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from deduplicator import parse_embedding, cosine_similarity  # noqa: E402  (pure; reuse vectors)
 from llm_json import parse_json_obj  # noqa: E402  (tolerant LLM-JSON parse)
 
-JST = timezone(timedelta(hours=9))
-
 
 def _load_config():
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -57,6 +55,7 @@ try:
 except Exception:
     _CFG = {}
 
+JST = timezone(timedelta(hours=int(_CFG.get("operator_tz_offset_hours", 9))))  # operator timezone (JST = +9), config-driven
 WHAT_CHANGED_HEADING = str(_CFG.get("what_changed_section_header", "## 📈 What Changed"))
 NUMERIC_TYPES = ("magnitude", "cumulative", "forecast")
 CATEGORICAL_TYPES = ("status", "reversal", "scope", "attribution")

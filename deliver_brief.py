@@ -33,7 +33,7 @@ import deliver as dlv  # noqa: E402
 import surface_render as srf  # noqa: E402  (2026-06-19: per-surface Telegram render — item 2)
 from brief_select import pick_best_brief  # noqa: E402  (NF-F4: deliver today's most-complete brief)
 
-JST = timezone(timedelta(hours=9))  # NF-F4: briefs are dated in JST; select on the JST day
+JST = timezone(timedelta(hours=int(dlv._load_cfg().get("operator_tz_offset_hours", 9))))  # NF-F4: briefs dated in JST (operator tz)
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")

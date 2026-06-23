@@ -9,9 +9,22 @@ a cost-report failure can never affect the briefs.
 
     venv\\Scripts\\python.exe tests\\test_cost_report.py
 """
+import os
 from datetime import datetime, timezone, timedelta
 
-JST = timezone(timedelta(hours=9))
+import yaml
+
+
+def _tz_offset():
+    try:
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(base, "config", "models.yaml"), encoding="utf-8") as f:
+            return int((yaml.safe_load(f) or {}).get("operator_tz_offset_hours", 9))
+    except Exception:
+        return 9
+
+
+JST = timezone(timedelta(hours=_tz_offset()))
 # Friendly labels for the task_type buckets; unknown types fall through with their raw name.
 _TASK_LABELS = {"brief": "📲 Telegram brief", "whatsapp_brief": "💬 WhatsApp"}
 

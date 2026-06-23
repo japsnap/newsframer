@@ -36,7 +36,7 @@ except Exception:
 FETCH_ERRORS = []
 
 # §8.7: the distributed scrape calendar is keyed to the JST weekday (the brief runs 06:00 JST).
-JST = timezone(timedelta(hours=9))
+# JST (operator timezone, config-driven) is defined just after _CFG loads, below.
 
 # --- Config ---
 def load_config():
@@ -52,6 +52,7 @@ except Exception:
     _CFG = {}
 PR_KEYWORDS = list(_CFG.get("fetcher_pr_keywords", ["sponsored", "partner", "press release", "advertorial", "paid post"]))
 SCRAPE_TIMEOUT = int(_CFG.get("fetcher_scrape_timeout_seconds", 10))
+JST = timezone(timedelta(hours=int(_CFG.get("operator_tz_offset_hours", 9))))  # §8.7 scrape calendar / dates (operator tz)
 
 # --- Supabase ---
 def get_supabase():
