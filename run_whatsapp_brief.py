@@ -78,14 +78,17 @@ def out_file(chat, lang):
 
 
 def md_to_whatsapp(text):
+    cfg = load_config()
+    bullet = cfg.get("whatsapp_bullet_marker", "• ")
+    emph = cfg.get("whatsapp_emphasis_marker", "*")
     out = []
     for line in text.split("\n"):
         m = re.match(r"^\s*#{1,6}\s+(.*)$", line)
         if m:
-            out.append("*" + m.group(1).strip() + "*")
+            out.append(emph + m.group(1).strip() + emph)
             continue
-        s = re.sub(r"\*\*(.+?)\*\*", r"*\1*", line)
-        s = re.sub(r"^\s*[-*]\s+", "• ", s)
+        s = re.sub(r"\*\*(.+?)\*\*", lambda mm: emph + mm.group(1) + emph, line)
+        s = re.sub(r"^\s*[-*]\s+", lambda mm: bullet, s)
         out.append(s)
     return "\n".join(out)
 

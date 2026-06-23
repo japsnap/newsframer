@@ -96,6 +96,8 @@ language_labels:                # display labels per language code (WhatsApp "so
   ar: "Arabic"
   hi: "Hindi"
   en: "English"
+whatsapp_bullet_marker: "• "    # md_to_whatsapp: bullet replacement for markdown "- "/"* " list items
+whatsapp_emphasis_marker: "*"   # md_to_whatsapp: WhatsApp bold/heading marker (replaces markdown ** and ##)
 
 # --- Daily cost report (NF-14) — to the operator's Telegram, AFTER the 11:00 WhatsApp dispatch ---
 # Once the WhatsApp brief reaches the group + Muda, send the operator a cost rollup for the day: the
