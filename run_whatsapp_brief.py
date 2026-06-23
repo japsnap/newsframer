@@ -374,12 +374,13 @@ def generate_brief(config, sb, categories, topic_keywords, length=None, exclude_
 def translate(config, text, lang, translate_model, sb=None):
     label = LANG_LABELS.get(lang, lang)
     fallback = config.get("writer_model", "anthropic/claude-haiku-4-5")
-    sys_p = (
-        f"You are a professional translator. Translate the user's English news brief into natural, "
-        f"fluent {label}. Preserve the structure EXACTLY: same headings, bullets (•), bold (*...*) "
-        f"markers, and the final footer line. Keep proper nouns and organisation names in English "
-        f"(do not transliterate names). Output ONLY the translation — no preamble, no notes."
+    _default_sys = (
+        "You are a professional translator. Translate the user's English news brief into natural, "
+        "fluent {label}. Preserve the structure EXACTLY: same headings, bullets (•), bold (*...*) "
+        "markers, and the final footer line. Keep proper nouns and organisation names in English "
+        "(do not transliterate names). Output ONLY the translation — no preamble, no notes."
     )
+    sys_p = config.get("whatsapp_translate_system_prompt", _default_sys).replace("{label}", label)
     msgs = [{"role": "system", "content": sys_p}, {"role": "user", "content": text}]
     used = translate_model
     try:
