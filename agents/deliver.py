@@ -31,6 +31,7 @@ def _load_cfg():
 # Sourced from config (default reproduces prior behaviour). Telegram hard cap is 4096.
 TELEGRAM_LIMIT = int(_load_cfg().get("telegram_message_limit", 3800))
 GATEWAY_SEND_TIMEOUT = int(_load_cfg().get("gateway_send_timeout_seconds", 120))
+TELEGRAM_ALERT_TIMEOUT = int(_load_cfg().get("telegram_alert_timeout_seconds", 20))
 
 
 # --- pure: send confirmation + the record/alert decision -------------------
@@ -108,7 +109,7 @@ def send_alert(text):
     try:
         r = requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat, "text": text, "disable_web_page_preview": True}, timeout=20,
+            json={"chat_id": chat, "text": text, "disable_web_page_preview": True}, timeout=TELEGRAM_ALERT_TIMEOUT,
         )
         return bool(r.json().get("ok"))
     except Exception as e:

@@ -341,6 +341,7 @@ exec_log_enabled: true
 # --- Delivery ---
 telegram_message_limit: 3800       # per-message char cap (Telegram hard cap is 4096)
 gateway_send_timeout_seconds: 120  # per-message timeout for the gateway subprocess send (deliver.gateway_send)
+telegram_alert_timeout_seconds: 20 # timeout for the out-of-band Telegram alert (deliver.send_alert)
 deliver_wait_seconds: 240          # no-delivery fix (2026-06-14): deliver_brief waits up to this long
 deliver_poll_seconds: 15           #   for today's fresh brief before giving up (covers a build that
                                    #   finishes just after deliver starts). 0 = old no-wait behaviour.
