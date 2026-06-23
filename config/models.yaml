@@ -386,6 +386,7 @@ sequencing_placement: ["subsection", "inline"]  # where notes show: 'subsection'
 what_changed_section_header: "## 📈 What Changed"  # heading for the sequencing 'What Changed' subsection (Telegram brief)
 coverage_warning_left: "_⚠ Left-leaning media only — opposing view absent._"   # one-sided-coverage note (left) the writer appends as a theme's final line (NF-NEW10c)
 coverage_warning_right: "_⚠ Right-leaning media only — opposing view absent._"  # one-sided-coverage note (right)
+quiet_day_text: "_Quiet news day — fewer items than usual._"  # prepended to a thin-day brief (Telegram + WhatsApp)
 sequencing_model: "gemini/gemini-2.5-flash-lite"  # Stage A structured-fact extraction (cheapest)
 sequencing_temperature: 0              # deterministic extraction
 sequencing_max_tokens: 200             # one small JSON fact per story

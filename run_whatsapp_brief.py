@@ -354,7 +354,7 @@ def generate_brief(config, sb, categories, topic_keywords, length=None, exclude_
             raise
     text = resp.choices[0].message.content.strip()
     if quiet:
-        text = "_Quiet news day — fewer items than usual._\n\n" + text
+        text = load_config().get("quiet_day_text", "_Quiet news day — fewer items than usual._") + "\n\n" + text
     # NF-F2: flag (don't fail) an over-cap brief so editorial drift is visible in the run log.
     print(f"  brief chars: {len(text)} (cap {max_chars})")
     _overrun = overrun_flag(len(text), max_chars, config.get("writer_char_overrun_warn_ratio", 1.0))

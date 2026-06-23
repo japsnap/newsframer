@@ -70,6 +70,7 @@ DROP_SHORT_MAX_CHARS = int(_CFG.get("drop_report_short_max_chars", 400))
 DROP_LONG_MAX_CHARS = int(_CFG.get("drop_report_long_max_chars", 2000))
 COVERAGE_WARNING_LEFT = str(_CFG.get("coverage_warning_left", "_⚠ Left-leaning media only — opposing view absent._"))
 COVERAGE_WARNING_RIGHT = str(_CFG.get("coverage_warning_right", "_⚠ Right-leaning media only — opposing view absent._"))
+QUIET_DAY_TEXT = str(_CFG.get("quiet_day_text", "_Quiet news day — fewer items than usual._"))
 
 
 def load_prompt_files():
@@ -842,7 +843,7 @@ def run_writer():
             raise
     briefing_text = response.choices[0].message.content.strip()
     if quiet_day:
-        briefing_text = "_Quiet news day — fewer items than usual._\n\n" + briefing_text
+        briefing_text = QUIET_DAY_TEXT + "\n\n" + briefing_text
 
     # Splice the deterministic Investigations section (drops always surface here,
     # whether or not they were also woven into the main theme). No drops -> no-op.
