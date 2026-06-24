@@ -207,9 +207,13 @@ deduplicator_price_event_text_chars: 300
 
 # --- World Cup (NF-A3, temporary — data from Wikipedia, not an API) ---
 worldcup_end_date: "2026-07-19"        # after this the WC message self-skips (no empty sends)
-worldcup_result_window_hours: 24       # results = FINISHED matches that kicked off in the last N hours —
-                                       #   a TRUE rolling window by real kickoff time, NOT a venue-date cut
-                                       #   (WC venues are in the US/behind UTC, so a venue date lags real time)
+worldcup_result_window_hours: 28       # NF-F5: 28 = the 24h daily-run gap + ~4h match-length slack, so a match
+                                       #   still IN PROGRESS at one day's run is still caught as a FINISHED result
+                                       #   at the next day's run (instead of vanishing in the live->results gap).
+                                       #   Rolling window by real kickoff time, NOT a venue-date cut (WC venues are
+                                       #   in the US/behind UTC, so a venue date lags real time). Trade-off (accepted
+                                       #   — throwaway WC feature): a match finishing just before a run may show in
+                                       #   results two days running. Set back to 24 to revert.
 worldcup_fixture_window_hours: 24      # fixtures = matches kicking off within the next N hours (rolling)
 worldcup_live_window_hours: 4          # a match that kicked off in the last N hours with no final score
                                        #   yet shows as "🔴 In progress" — else an in-play match falls in
