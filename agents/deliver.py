@@ -13,6 +13,7 @@ thin wrappers injected into it.
 import os
 import re
 import json
+import time
 import subprocess
 
 import yaml
@@ -96,6 +97,31 @@ def record_delivered(sb, account, article_ids, brief_id=None):
         rows, on_conflict="article_id,account", ignore_duplicates=True
     ).execute()
     return len(rows)
+
+
+# --- local delivered-marker (idempotent delivery, retry-redelivery fix) ------
+# A tiny local file proving "brief X was delivered to surface Y". Written ONLY after a confirmed send
+# (so §4.3 holds) and BEFORE the DB record — so a kill between the send and the DB record still leaves
+# proof the send happened, and the cron retry skips it. Reliable even when the deliveries row didn't
+# commit (the kill-before-record window) and for quiet-day briefs with no article_ids to record.
+def _delivered_dir(base_dir):
+    return os.path.join(base_dir, ".runstate", "delivered")
+
+
+def delivered_marker_path(base_dir, brief_id, account):
+    safe = f"{brief_id}__{account}".replace(os.sep, "_").replace("/", "_")
+    return os.path.join(_delivered_dir(base_dir), f"{safe}.marker")
+
+
+def mark_delivered_local(base_dir, brief_id, account, now=None):
+    """Record locally that this brief was delivered to this surface (call only after confirmed send)."""
+    os.makedirs(_delivered_dir(base_dir), exist_ok=True)
+    with open(delivered_marker_path(base_dir, brief_id, account), "w", encoding="utf-8") as f:
+        f.write(str(now if now is not None else time.time()))
+
+
+def is_delivered_local(base_dir, brief_id, account):
+    return os.path.exists(delivered_marker_path(base_dir, brief_id, account))
 
 
 def send_alert(text):

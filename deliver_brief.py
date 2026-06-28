@@ -64,6 +64,9 @@ _CFG = _load_models_cfg()
 # not missed. Env overrides config; the config default 0 reproduces the old no-wait path.
 WAIT_SECONDS = float(os.getenv("NEWSFRAMER_DELIVER_WAIT_SECONDS", _CFG.get("deliver_wait_seconds", 0)))
 POLL_SECONDS = float(os.getenv("NEWSFRAMER_DELIVER_POLL_SECONDS", _CFG.get("deliver_poll_seconds", 15)))
+# IDEMPOTENT DELIVERY (retry-redelivery fix): skip the send if today's brief was already delivered
+# to this surface. Default on; set delivery_idempotent: false to restore the old always-send path.
+DELIVERY_IDEMPOTENT = bool(_CFG.get("delivery_idempotent", True))
 
 
 def load_fresh_brief(sb):
@@ -121,6 +124,18 @@ def _run_critic(brief_text, cfg, dry=False):
         print(f"  NF-F1: Critic skipped (isolated): {type(e).__name__}: {e}")
 
 
+def already_delivered(sb, brief_id, account):
+    """True if this brief was already recorded delivered to this surface (§4.3 deliveries row exists).
+    Fail-OPEN on a query error — never suppress a real delivery because the check itself hiccuped."""
+    try:
+        r = (sb.table("deliveries").select("article_id")
+             .eq("brief_id", brief_id).eq("account", account).limit(1).execute())
+        return bool(r.data)
+    except Exception as e:
+        print(f"  (idempotency DB check skipped, failing open: {type(e).__name__})")
+        return False
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="print chunk plan; no send/record")
@@ -136,6 +151,17 @@ def main():
     if not brief:
         print(f"deliver_brief: no fresh brief to send ({why}). Nothing sent or recorded.")
         return 2
+
+    # IDEMPOTENT DELIVERY (retry-redelivery fix): if today's brief was already delivered to this
+    # surface — proven by the local marker (covers the kill-before-DB-record window) OR a deliveries
+    # row — skip the send so a cron retry can't duplicate it. Dry-run never sends, so it is exempt.
+    if not args.dry_run and DELIVERY_IDEMPOTENT and (
+        dlv.is_delivered_local(str(BASE_DIR), brief["id"], DELIV_ACCOUNT)
+        or already_delivered(sb, brief["id"], DELIV_ACCOUNT)
+    ):
+        print(f"deliver_brief: brief {brief['id']} already delivered to {DELIV_ACCOUNT}; "
+              f"skipping send (idempotent).")
+        return 0
 
     ids = brief.get("article_ids") or []
     chunks = dlv.split_for_telegram(brief[LANG_COL])
@@ -163,7 +189,15 @@ def main():
         send_fn = lambda chunk: None  # noqa: E731  (force failure to exercise the alert path)
     else:
         send_fn = lambda chunk: dlv.gateway_send("telegram", TG_ACCOUNT, CHAT_ID, chunk)  # noqa: E731
-    record_fn = lambda account, article_ids, brief_id: dlv.record_delivered(sb, account, article_ids, brief_id)  # noqa: E731
+    def record_fn(account, article_ids, brief_id):
+        # Local marker FIRST — written only here, i.e. AFTER every chunk confirmed (§4.3 honoured),
+        # and BEFORE the deliveries DB write — so a kill in the send->record window still leaves proof
+        # the send happened and the cron retry skips it.
+        try:
+            dlv.mark_delivered_local(str(BASE_DIR), brief_id, account)
+        except Exception as e:
+            print(f"  (local delivered-marker skipped: {type(e).__name__})")
+        return dlv.record_delivered(sb, account, article_ids, brief_id)
 
     res = dlv.deliver_and_record(
         ids, chunks, DELIV_ACCOUNT, brief["id"],

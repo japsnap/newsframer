@@ -14,6 +14,7 @@ import sys
 import time
 import hashlib
 import random
+import re
 from datetime import datetime, timezone, timedelta
 from bs4 import BeautifulSoup
 from supabase import create_client
@@ -55,6 +56,14 @@ SCRAPE_TIMEOUT = int(_CFG.get("fetcher_scrape_timeout_seconds", 10))
 JST = timezone(timedelta(hours=int(_CFG.get("operator_tz_offset_hours", 9))))  # §8.7 scrape calendar / dates (operator tz)
 MIN_URL_LENGTH = int(_CFG.get("fetcher_min_url_length", 30))
 MIN_TITLE_LENGTH = int(_CFG.get("fetcher_min_title_length", 15))
+
+# --- Firecrawl scrape fallback (NF-B4, §3.3): OFF by default; key read from .env at call time ---
+FIRECRAWL_ENABLED = bool(_CFG.get("firecrawl_enabled", False))
+FIRECRAWL_API_URL = str(_CFG.get("firecrawl_api_url", "https://api.firecrawl.dev/v2/scrape"))
+FIRECRAWL_TIMEOUT = int(_CFG.get("firecrawl_timeout_seconds", 30))
+FIRECRAWL_MIN_TITLE = int(_CFG.get("firecrawl_min_title_length", 20))
+FIRECRAWL_MAX_LINKS = int(_CFG.get("firecrawl_max_links", 60))
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")  # markdown [title](url)
 
 # --- Supabase ---
 def get_supabase():
@@ -207,38 +216,104 @@ def fetch_rss(source: dict, cutoff: datetime, max_articles: int) -> list:
     return [art for _, art in candidates[:max_articles]]
 
 # --- Web Scraper ---
-def fetch_web(source: dict, cutoff: datetime, max_articles: int) -> list:
-    articles = []
+def firecrawl_list_links(url, min_title=None, max_links=None):
+    """NF-B4 (§3.3): scrape ONE listing page via Firecrawl and return [{title, url}] parsed from
+    the clean markdown. Firecrawl's `links` array has no anchor text, so titles come from the
+    markdown `[title](url)` syntax — mirroring the old <a>-text scrape. LISTING PAGE ONLY: one
+    call per source per run (free-tier discipline; we never Firecrawl article bodies). Returns
+    None on ANY failure (no url, missing key, HTTP/timeout, non-JSON, success=false, no markdown)
+    so the caller falls back to the BeautifulSoup path. Never raises."""
+    if not url:
+        return None
+    key = os.getenv("FIRECRAWL_API_KEY")
+    if not key:
+        return None
+    min_title = FIRECRAWL_MIN_TITLE if min_title is None else min_title
+    max_links = FIRECRAWL_MAX_LINKS if max_links is None else max_links
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (compatible; OpenClaw/1.0)"}
-        resp = requests.get(source["site_url"], headers=headers, timeout=SCRAPE_TIMEOUT)
-        soup = BeautifulSoup(resp.text, "html.parser")
+        resp = requests.post(
+            FIRECRAWL_API_URL,
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={"url": url, "formats": ["markdown", "links"]},
+            timeout=FIRECRAWL_TIMEOUT,
+        )
+        data = resp.json()
+    except Exception as e:
+        print(f"  Firecrawl request error for {url}: {e}")
+        return None
+    if not isinstance(data, dict) or not data.get("success"):
+        return None
+    md = (data.get("data") or {}).get("markdown") or ""
+    if not isinstance(md, str) or not md:
+        return None
+    # Replace markdown images ![alt](src) with their alt text FIRST: a nested image-link
+    # [![alt](img)](href) then collapses to [alt](href), so we capture the ARTICLE url + a real
+    # title (not the image url); a standalone image becomes plain text and is ignored.
+    md = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", md)
+    out, seen = [], set()
+    for m in _MD_LINK_RE.finditer(md):
+        # link text can span lines with `\` hard-breaks + a trailing summary; flatten to one clean line
+        title = re.sub(r"\s+", " ", m.group(1).replace("\\", " ")).strip()
+        link = m.group(2).strip()
+        if len(title) <= min_title or link in seen:
+            continue
+        seen.add(link)
+        out.append({"title": title, "url": link})
+        if len(out) >= max_links:
+            break
+    return out
 
-        links = []
-        for a in soup.find_all("a", href=True):
-            href = a["href"]
-            text = a.get_text(strip=True)
-            if len(text) > 20 and href.startswith("http"):
-                links.append({"title": text, "url": href})
 
-        for link in links[:max_articles]:
-            if is_pr_article(link["title"], source):
-                continue
-            articles.append({
-                "source_id": source["id"],
-                "title": link["title"],
-                "url": link["url"],
-                "content_raw": "",
-                "published_at": datetime.now(timezone.utc).isoformat(),
-                "branch": None,
-                "duplicate_count": 1,
-            })
+def _links_to_articles(source, links, max_articles):
+    """Shared: turn [{title, url}] listing links into raw_article dicts. Scrape sources carry no
+    reliable per-item date, so published_at defaults to now (unchanged from the original path)."""
+    articles = []
+    for link in links[:max_articles]:
+        if is_pr_article(link["title"], source):
+            continue
+        articles.append({
+            "source_id": source["id"],
+            "title": link["title"],
+            "url": link["url"],
+            "content_raw": "",
+            "published_at": datetime.now(timezone.utc).isoformat(),
+            "branch": None,
+            "duplicate_count": 1,
+        })
+    return articles
 
+
+def _scrape_links_bs4(source):
+    """The original BeautifulSoup listing grab — the fallback when Firecrawl is off or fails."""
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; OpenClaw/1.0)"}
+    resp = requests.get(source["site_url"], headers=headers, timeout=SCRAPE_TIMEOUT)
+    soup = BeautifulSoup(resp.text, "html.parser")
+    links = []
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        text = a.get_text(strip=True)
+        if len(text) > 20 and href.startswith("http"):
+            links.append({"title": text, "url": href})
+    return links
+
+
+def fetch_web(source: dict, cutoff: datetime, max_articles: int) -> list:
+    """Scrape a no-RSS source's LISTING page for article links. Uses Firecrawl (NF-B4, §3.3) when
+    `firecrawl_enabled` AND a key is present; otherwise — or on ANY Firecrawl failure — the original
+    BeautifulSoup grab. `cutoff` is unused (scrape items carry no reliable date), as before."""
+    try:
+        links = None
+        if FIRECRAWL_ENABLED:
+            links = firecrawl_list_links(source.get("site_url"))
+            if links is not None:
+                print(f"  Firecrawl listing: {source.get('name')} -> {len(links)} links")
+        if links is None:
+            links = _scrape_links_bs4(source)
+        return _links_to_articles(source, links, max_articles)
     except Exception as e:
         FETCH_ERRORS.append(source.get("name", source.get("id", "?")))
         print(f"  Web scrape error for {source['name']}: {e}")
-
-    return articles
+        return []
 
 # --- Deduplication ---
 def deduplicate_batch(articles: list) -> list:

@@ -16,8 +16,10 @@ import sys
 import yaml
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# Not a paid text-completion model -> no pricing entry expected.
-EXCLUDE = {"fetcher_model", "deduplicator_embedding_model"}
+# Not a paid (metered) text-completion model -> no pricing entry expected. fetcher uses no model; the
+# embedding model is priced separately; writer_subscription_model runs on the flat Max subscription via
+# `claude -p` (no per-token price by design — its agent_runs cost is logged as $0).
+EXCLUDE = {"fetcher_model", "deduplicator_embedding_model", "writer_subscription_model"}
 PASS = []
 
 

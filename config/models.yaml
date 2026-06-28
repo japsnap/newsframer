@@ -52,6 +52,19 @@ fetch_profiles:
   normal: 30
   light: 10
 
+# --- Firecrawl scrape fallback (NF-B4, spec §3.3) --------------------------------------------
+# OFF by default. When on, the no-RSS scrape sources (TRT Global, Amnesty Evidence Lab, Delphi,
+# CST) fetch their LISTING page via Firecrawl's clean-markdown scrape instead of the basic
+# BeautifulSoup grab. LISTING PAGE ONLY — one Firecrawl call per source per run — to stay inside
+# the free tier (1,000 scrapes/mo; ~130-150/mo expected). Any failure (missing key, HTTP/timeout,
+# bad shape) silently FALLS BACK to the BeautifulSoup path, so a Firecrawl outage can never starve
+# these sources. The API key is read from .env (FIRECRAWL_API_KEY) and is NEVER stored here.
+firecrawl_enabled: true          # NF-B4 LIVE 2026-06-25 — the no-RSS scrape sources fetch via Firecrawl (set false to revert)
+firecrawl_api_url: "https://api.firecrawl.dev/v2/scrape"
+firecrawl_timeout_seconds: 30        # Firecrawl renders JS, so it can take longer than a plain GET
+firecrawl_min_title_length: 20       # markdown link text shorter than this isn't an article title (matches the old >20 anchor-text filter)
+firecrawl_max_links: 60              # safety cap on links parsed from one listing page
+
 # Priority
 priority_source_types: ["vc_blog", "research", "blog"]
 priority_guaranteed: true  # 優先ソースは150件制限の外（fetcher.pyにハードコード済み）
@@ -117,6 +130,14 @@ cost_report_task_labels:        # task_type bucket -> friendly label in the dail
 # Writer settings
 writer_model: "anthropic/claude-haiku-4-5"
 writer_fallback_model: "gemini/gemini-2.5-flash-lite"   # Fix 3: degrade to Gemini if Anthropic errors/rate-limits/billing-fails
+# --- Writer on subscription (Phase 2 cost move) — run the writer's draft via headless Claude Code
+# (`claude -p`) on the flat Max subscription instead of the metered Anthropic API. ANY failure falls
+# back to the API path above (never silently drops); agent_runs.model_used shows which path ran.
+# Writer only (low volume); the high-volume analyst stays on the API. Default OFF = today's API path.
+writer_use_subscription: true         # true = try the subscription (claude -p) first, API fallback. false = API only (today).
+writer_subscription_model: "haiku"    # Claude Code model alias — haiku matches the API writer model (claude-haiku-4-5) and is fast on quota
+writer_subscription_timeout_seconds: 600
+writer_subscription_max_thinking_tokens: 0   # 0 DISABLES Claude Code's extended thinking — REQUIRED, else the headless call loops/hangs (>600s) on the big brief synthesis; with it ~70s
 writer_primary_language: "en"
 writer_min_relevance: 6
 writer_relevance_floor: 4              # §4.5: backoff may lower the threshold down to here, within the 24h window
@@ -159,6 +180,34 @@ bundle_theme_cap: 2                # max themes any single bundle may take (cove
 theme_count_multiplier: 1.5        # total Telegram themes = ceil(multiplier * #active bundles); 6 bundles -> 9
 theme_count_max: 14                # absolute safety ceiling on total themes (headroom as bundles grow: vc now,
                                    #   football/etc. later — the multiplier above does the scaling; this only caps runaway)
+
+# --- Topic cadence classes (NF-NEW14, §8.1/§8.6) --------------------------------------------
+# Every source category belongs to a CADENCE CLASS that controls how its content is SELECTED for the
+# brief — daily news vs low-frequency/curated topics are handled differently, and which-is-which is
+# CONFIG (adding a topic = assign it a class here; unmapped categories use topic_class_default). A
+# class sets: how far back selection reaches (window_hours), the entry relevance bar (relevance_bar),
+# and how many articles a CLUSTER needs to stand as a theme (min_theme_articles).
+#   regular        = daily news: 24h window + a real >=2-article cluster (a lone article becomes a
+#                    highlight, never its own daily-news theme).
+#   low_frequency  = VC / future curated/sparse topics: a window that covers the cadence, a lower bar
+#                    (curated essays score low but matter), and a SINGLE article MAY stand as a theme.
+# Cross-run duplication across the twice-weekly slots is prevented by the §4.3 deliveries
+# set-difference (a delivered article is excluded from later briefs), so a wider window never re-sends.
+topic_class_default: regular
+topic_class_floor_keeps_single: true   # B (default): each active topic keeps its ONE best story as a theme even if single-source;
+                                       #   ADDITIONAL themes from that topic still need the class min_theme_articles (no single-article
+                                       #   clutter). false = strict A: a single-source story is always a highlight, never its own theme.
+category_classes:                  # category -> class (unlisted -> topic_class_default). NF-NEW14 LIVE 2026-06-25.
+  vc: low_frequency
+topic_classes:
+  regular:
+    window_hours: null             # null -> writer_window_hours (24h)
+    relevance_bar: null            # null -> writer_min_relevance (the normal gate)
+    min_theme_articles: 2          # a daily-news theme needs >=2 articles; a lone article -> highlight, not a theme
+  low_frequency:
+    window_hours: 168              # 7 days — covers a twice-weekly (or rarer) cadence; dedup via §4.3 deliveries
+    relevance_bar: 3               # admit under-scored curated essays (VC scores ~3-4)
+    min_theme_articles: 1          # a single article MAY stand as its own theme (rare topic, each post counts)
 
 # ============================================================================
 # Tunables — NOTHING below is hard-coded in code; every value here is read with
@@ -370,6 +419,22 @@ operator_tz_offset_hours: 9        # operator timezone offset from UTC (JST = +9
 deliver_wait_seconds: 240          # no-delivery fix (2026-06-14): deliver_brief waits up to this long
 deliver_poll_seconds: 15           #   for today's fresh brief before giving up (covers a build that
                                    #   finishes just after deliver starts). 0 = old no-wait behaviour.
+
+# --- Double-generation / retry-redelivery fix (run lock + idempotent delivery) ---
+# Root cause: on a slow morning the build runs longer than the cron command timeout, so OpenClaw
+# re-invokes the job while the first build is still running -> a 2nd/3rd CONCURRENT pipeline (each
+# re-runs the analyst = ~2-3x spend), and a retry after a confirmed-but-unrecorded send re-delivers.
+run_lock_enabled: true             # only ONE build runs per slot+JST-day; a concurrent/retry invocation no-ops (stops the 2x analyst spend). false = old behaviour.
+run_lock_stale_minutes: 60         # a held lock older than this = a crashed run, reclaimed. MUST exceed the real max build runtime (~38 min observed) so a live long build is never reclaimed.
+delivery_idempotent: true          # skip the send if today's brief was already delivered to this surface (no duplicate on a retry). false = old behaviour.
+
+# --- Independent gateway-liveness watchdog (gateway_watchdog.py) ---
+# Run by a Windows Scheduled Task DIRECTLY (not a gateway cron), so it works when the gateway itself
+# died — the blind spot that let a ~2-day WhatsApp outage go silent (2026-06-25). Pings the gateway;
+# if down, restarts it + alerts Telegram (missed crons then catch up on reconnect).
+gateway_watchdog_enabled: true
+gateway_watchdog_ping_timeout_seconds: 25   # wait this long for the gateway's `cron list` before declaring it down
+gateway_task_name: "OpenClaw Gateway"       # the Windows scheduled task the watchdog restarts when the gateway is down
 
 # --- Run-health watchdog: slot start hours (JST; keep in step with the cron schedules) ---
 slot_hours:

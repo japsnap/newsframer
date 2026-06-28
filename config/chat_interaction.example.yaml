@@ -1,0 +1,34 @@
+# Per-chat interaction settings (Phase 2 — reply system / "ask the administrator"). TEMPLATE.
+# Copy to  config/chat_interaction.yaml  (gitignored) and tune per chat. Controls how the assistant
+# handles REPLIES to delivered messages, independently per group/DM. Nothing is hardcoded.
+#
+# The assistant is the ADMINISTRATOR's assistant. It answers a NARROW scope (general questions, the
+# news it delivers, and people within the same chat) and politely declines everything else — it never
+# discusses the administrator (operator) or other subscribers. Settings/subscription changes are
+# owner-only and route to the administrator for approval ("I'll check with the administrator").
+
+reply_system_enabled: true        # master on/off for answering replies at all (false = deliver-only, no Q&A)
+reply_max_tokens: 400             # cap an answer's length (tokens) so one reply can't run up cost
+reply_input_max_chars: 600        # truncate an incoming reply before the model sees it (token guard)
+administrator_label: "the administrator"   # how the assistant refers to the owner (never "boss")
+length_options: ["short", "medium", "long"]   # news-length choices offered at signup
+operator_aliases: ["the operator", "the admin", "the owner", "shota"]  # names that mean the operator -> never answered about
+
+owner_ids:                        # sender/chat ids treated as the owner (you) — never capped, may make changes
+  - "telegram:YOUR_OWNER_CHAT_ID"
+
+defaults:                         # applied to any chat not explicitly overridden below
+  permissions: qa                 # qa = read + rate-limited Q&A;  read = no replies at all
+  rate_limit_per_day: 20          # max member Q&A replies/day (the daily briefing is NOT counted); 0 = unlimited
+  max_turns_per_conversation: 8   # max back-and-forth in one conversation before wrapping up; 0 = unlimited
+  default_language: en            # answer language when none is detected from the reply
+  write_keywords:                 # a reply containing any of these is treated as a settings/data change (owner-only)
+    ["change", "set", "update", "subscribe", "unsubscribe", "add", "remove", "settings", "config", "delete", "grant", "language"]
+  roman_urdu_markers:             # a reply containing any of these is answered in Urdu (Roman-Urdu detection)
+    ["han", "nahi", "chahiye", "kya", "aur", "batao", "kaise", "theek", "acha", "kar do", "information do"]
+
+chats:                            # per-chat overrides (chat id -> partial settings; anything omitted falls back to defaults)
+  "whatsapp:Happy Rana":
+    rate_limit_per_day: 20
+  "whatsapp:Muda":
+    rate_limit_per_day: 20

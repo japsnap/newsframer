@@ -11,11 +11,14 @@ import subprocess
 import sys
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
 PYTHON = sys.executable
+
+sys.path.insert(0, str(BASE_DIR / "agents"))
+import gen_lock  # noqa: E402  (single-generation lock — double-generation fix)
 
 # Fetch -> Classify -> Dedup(apply) -> Analyze -> Write.
 # NO dispatcher on purpose: OpenClaw delivers the finished brief.
@@ -33,6 +36,16 @@ def _cfg_flag(key, default=False):
         import yaml
         with open(BASE_DIR / "config" / "models.yaml", encoding="utf-8") as f:
             return bool((yaml.safe_load(f) or {}).get(key, default))
+    except Exception:
+        return default
+
+
+def _cfg_get(key, default):
+    try:
+        import yaml
+        with open(BASE_DIR / "config" / "models.yaml", encoding="utf-8") as f:
+            v = (yaml.safe_load(f) or {}).get(key, default)
+            return default if v is None else v
     except Exception:
         return default
 
@@ -59,19 +72,45 @@ def run_agent(name, cmd):
 
 
 def main():
-    # NF-14: one trace_id ties this run's engine rows together in execution_log. Each engine is a
-    # subprocess and inherits it via the environment; run_log mirrors it best-effort (never blocking).
-    trace_id = uuid.uuid4().hex
-    os.environ["NEWSFRAMER_TRACE_ID"] = trace_id
-    os.environ.setdefault("NEWSFRAMER_TASK_TYPE", "brief")
-    print(f"=== NewsFramer brief build start {datetime.utcnow().isoformat()} (no dispatcher) | trace={trace_id} ===")
-    any_failed = False
-    for name, cmd in AGENTS:
-        if not run_agent(name, cmd):
-            any_failed = True
-            # Continue — downstream engines may still have prior data to work with.
-    print(f"\n=== Brief build complete. Status: {'PARTIAL FAILURE' if any_failed else 'OK'} ===")
-    sys.exit(1 if any_failed else 0)
+    # SINGLE-GENERATION LOCK (double-generation fix): only one build runs per slot+JST-day. When the
+    # cron command times out mid-build and OpenClaw re-invokes the job, this second run finds the live
+    # lock and NO-OPS (exit 0) instead of re-running the whole pipeline (the analyst is the cost).
+    lock_enabled = bool(_cfg_get("run_lock_enabled", True))
+    locks_dir = str(BASE_DIR / ".runstate")
+    lock_name = "run_brief"
+    lock_key = None
+    have_lock = False
+    if lock_enabled:
+        tz = int(_cfg_get("operator_tz_offset_hours", 9))
+        jst_date = (datetime.utcnow() + timedelta(hours=tz)).date().isoformat()
+        lock_key = f"brief-{jst_date}"
+        stale_s = int(_cfg_get("run_lock_stale_minutes", 60)) * 60
+        have_lock, holder = gen_lock.acquire(lock_name, lock_key, locks_dir, stale_s)
+        if not have_lock:
+            age = int(time.time() - float(holder.get("ts", 0)))
+            print(f"run_brief: SKIP — a generation for {lock_key} is already running "
+                  f"(pid={holder.get('pid')}, age={age}s). No-op (single-generation lock).")
+            sys.exit(0)
+
+    rc = 0
+    try:
+        # NF-14: one trace_id ties this run's engine rows together in execution_log. Each engine is a
+        # subprocess and inherits it via the environment; run_log mirrors it best-effort (never blocking).
+        trace_id = uuid.uuid4().hex
+        os.environ["NEWSFRAMER_TRACE_ID"] = trace_id
+        os.environ.setdefault("NEWSFRAMER_TASK_TYPE", "brief")
+        print(f"=== NewsFramer brief build start {datetime.utcnow().isoformat()} (no dispatcher) | trace={trace_id} ===")
+        any_failed = False
+        for name, cmd in AGENTS:
+            if not run_agent(name, cmd):
+                any_failed = True
+                # Continue — downstream engines may still have prior data to work with.
+        print(f"\n=== Brief build complete. Status: {'PARTIAL FAILURE' if any_failed else 'OK'} ===")
+        rc = 1 if any_failed else 0
+    finally:
+        if have_lock:
+            gen_lock.release(lock_name, lock_key, locks_dir)
+    sys.exit(rc)
 
 
 if __name__ == "__main__":

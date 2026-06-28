@@ -30,7 +30,8 @@ from llm_json import parse_json_obj  # noqa: E402
 from drop_reports import (  # noqa: E402
     make_slug, is_woven, render_investigations_section, splice_investigations, pick_diverse,
 )
-from bundle_floors import select_themes_with_floors  # noqa: E402
+from bundle_floors import select_themes_with_floors, cluster_bundle  # noqa: E402
+import topic_classes as tc  # noqa: E402  (NF-NEW14 topic cadence classes)
 from char_monitor import overrun_flag  # noqa: E402  (NF-F2: over-cap quality flag)
 from link_monitor import bare_url_flag  # noqa: E402  (NF-NEW1: bare-URL quality flag)
 from window_audit import window_span_report  # noqa: E402  (NF-NEW2: provable 24h window)
@@ -632,9 +633,26 @@ def run_writer():
     print(f"  Interests:      {len(context['interests'])}")
     print(f"  Hypotheses:     {len(context['hypotheses'])}")
 
+    # NF-NEW14 topic classes: a category's class sets its selection window (regular 24h; low-frequency
+    # e.g. VC reaches back to cover its cadence), entry bar, and theme min-articles. Load the widest
+    # class window, then age-filter each category to its own below. Empty mapping == one global window.
+    tcl = tc.TopicClasses(
+        config.get("category_classes"), config.get("topic_classes"),
+        config.get("topic_class_default", tc.DEFAULT_CLASS), window_hours, min_rel,
+        floor_keeps_single=bool(config.get("topic_class_floor_keeps_single", True)))
+    load_window = tcl.max_window()
     candidates, total_in_window = load_window_scored_articles(
-        sb, window_hours, exclude_account=delivery_account
+        sb, load_window, exclude_account=delivery_account
     )
+    source_categories = load_source_categories(sb)
+
+    def _bundle_of(a):
+        return source_categories.get(a.get("source_id"))
+
+    # Keep each candidate only within ITS category's class window. The loader already excluded anything
+    # delivered (§4.3 set-difference), so a wider low-frequency window never re-sends across the slots.
+    candidates = tcl.filter_to_windows(candidates, datetime.now(timezone.utc), _bundle_of)
+    total_in_window = len(candidates)
     # NF-NEW2: prove, in the run log, how far back this session actually reached.
     fresh_h = int(config.get("whatsapp_fresh_hours", 6))
     print("  " + window_span_report([a.get("published_at") for a in candidates],
@@ -667,23 +685,17 @@ def run_writer():
     )
     print(f"  Drop-report candidates (investigative, {drop_window}h, non-delivered): {len(drop_candidates)}")
 
-    # §4.5 relevance backoff: lower the threshold ONLY within the 24h window (never outside),
-    # down to writer_relevance_floor, until at least min_themes articles qualify.
-    def _over_bar(a, rel):
-        s = a["score"]
-        return (s.get("relevance_score") or 0) >= rel or (s.get("actionability") or 0) >= 2
+    # §4.5 relevance backoff, now PER-CATEGORY (NF-NEW14): each category's entry bar comes from its
+    # class (default = writer_min_relevance); a global relax lowers all bars toward writer_relevance_floor
+    # until >= min_themes qualify. No category mapped == the old single-threshold backoff.
+    articles, chosen_relax = tcl.filter_qualifying(candidates, rel_floor, min_themes, _bundle_of)
+    chosen_rel = min_rel - chosen_relax
 
-    articles = []
-    chosen_rel = min_rel
-    for rel in range(min_rel, rel_floor - 1, -1):
-        chosen_rel = rel
-        articles = [a for a in candidates if _over_bar(a, rel)]
-        if len(articles) >= min_themes:
-            break
-
-    print(f"  Articles in {window_hours}h window:  {total_in_window}")
-    print(f"  Non-delivered scored:       {len(candidates)}")
-    print(f"  Qualifying (rel>={chosen_rel} or act>=2): {len(articles)}\n")
+    if tcl.category_classes:
+        print(f"  Topic classes: {tcl.category_classes} | bars: {tcl.bars_map() or '(all default)'} "
+              f"| load window {load_window}h")
+    print(f"  Candidates (per-category window, non-delivered scored): {len(candidates)}")
+    print(f"  Qualifying (per-category bar, relax {chosen_relax}): {len(articles)}\n")
 
     # §4.5 thin-day guard. Never backfill older/lower than the floor.
     quiet_day = False
@@ -698,16 +710,24 @@ def run_writer():
 
     effective_min_themes = 1 if quiet_day else min_themes
 
-    # Per-bundle theme floors (spec §8.1/§8.6): cluster ALL qualifying articles (the clustering
-    # algorithm is unchanged — passing a large cap just makes it return every cluster instead of
-    # pre-truncating to the top-N), then re-allocate which clusters become themes so each active
-    # bundle gets its floor, no bundle exceeds its cap, and the total scales with the active-bundle
-    # count. Telegram brief only; WhatsApp (which reuses cluster_by_topic_overlap directly) is untouched.
+    # Per-bundle theme floors (spec §8.1/§8.6): cluster ALL qualifying articles, then re-allocate which
+    # clusters become themes so each active bundle gets its floor, no bundle exceeds its cap, and the
+    # total scales with the active-bundle count. NF-NEW14: a cluster is theme-eligible only if it meets
+    # ITS class's min_theme_articles — so a regular daily-news topic needs a real >=2-article cluster (a
+    # lone article drops to highlights), while a low-frequency topic (VC) may stand alone.
     all_clusters, _ = cluster_by_topic_overlap(articles, len(articles), max_per_theme)
-    source_categories = load_source_categories(sb)
+
+    def _cluster_cat(c):
+        return cluster_bundle(c, source_categories)
+
+    theme_eligible, sub_threshold = tcl.eligible_clusters(all_clusters, _cluster_cat)
     clusters, leftovers, floor_report = select_themes_with_floors(
-        all_clusters, source_categories, bundle_floors, bundle_cap, theme_multiplier, theme_total_max
+        theme_eligible, source_categories, bundle_floors, bundle_cap, theme_multiplier, theme_total_max
     )
+    for _c in sub_threshold:               # lone-article daily-news clusters -> highlight pool, never a theme
+        leftovers.extend(_c)
+    if sub_threshold:
+        print(f"  Theme-eligibility: {len(sub_threshold)} sub-threshold cluster(s) -> highlights (per-class min_theme_articles)")
     print(f"  Bundle floors: {floor_report['num_active']} active bundle(s) -> "
           f"{floor_report['theme_count']}/{floor_report['target_total']} themes | "
           f"by-score={floor_report['before']} floored={floor_report['after']}")
@@ -830,21 +850,48 @@ def run_writer():
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
-    # Anthropic primary, Gemini 2.5 Flash-Lite fallback: an outage / rate-limit / billing
-    # error on the primary degrades to the cheap model instead of failing the brief.
+    # SUBSCRIPTION-FIRST (Phase 2 cost move): try the flat Max subscription via headless Claude Code
+    # (claude -p), then fall back to the metered API on ANY failure so a run never silently drops. The
+    # high-volume analyst is untouched (API). Default OFF reproduces today's API-only path byte-for-byte.
     fallback_model = config.get("writer_fallback_model", "gemini/gemini-2.5-flash-lite")
     used_model = model
-    print(f"\nGenerating briefing with {model}...")
-    try:
-        response = completion(model=model, messages=messages, temperature=writer_temperature, max_tokens=writer_max_tokens)
-    except Exception as primary_err:
-        if fallback_model and fallback_model != model:
-            print(f"  PRIMARY {model} FAILED: {primary_err}\n  Falling back to {fallback_model}...")
-            used_model = fallback_model
-            response = completion(model=used_model, messages=messages, temperature=writer_temperature, max_tokens=writer_max_tokens)
-        else:
-            raise
-    briefing_text = response.choices[0].message.content.strip()
+    briefing_text = None
+    t_in = t_out = 0
+    cost = 0.0
+
+    if bool(config.get("writer_use_subscription", False)):
+        try:
+            import cc_writer
+            sub_model = config.get("writer_subscription_model", "sonnet")
+            sub_timeout = int(config.get("writer_subscription_timeout_seconds", 600))
+            print(f"\nGenerating briefing via SUBSCRIPTION (claude -p, model={sub_model})...")
+            briefing_text, used_model, t_in, t_out = cc_writer.complete_via_subscription(
+                system_prompt, user_prompt, model=sub_model, timeout=sub_timeout,
+                max_thinking_tokens=int(config.get("writer_subscription_max_thinking_tokens", 0)))
+            cost = 0.0  # subscription = flat; no metered $ for this call
+            print(f"  subscription OK ({used_model}, in={t_in} out={t_out}, $0 metered)")
+        except Exception as sub_err:
+            print(f"  SUBSCRIPTION path FAILED: {type(sub_err).__name__}: {sub_err}\n  Falling back to API ({model})...")
+            briefing_text = None
+
+    if briefing_text is None:
+        # API path (unchanged): Anthropic primary, Gemini 2.5 Flash-Lite fallback on outage/rate-limit/billing.
+        used_model = model
+        print(f"\nGenerating briefing with {model} (API)...")
+        try:
+            response = completion(model=model, messages=messages, temperature=writer_temperature, max_tokens=writer_max_tokens)
+        except Exception as primary_err:
+            if fallback_model and fallback_model != model:
+                print(f"  PRIMARY {model} FAILED: {primary_err}\n  Falling back to {fallback_model}...")
+                used_model = fallback_model
+                response = completion(model=used_model, messages=messages, temperature=writer_temperature, max_tokens=writer_max_tokens)
+            else:
+                raise
+        briefing_text = response.choices[0].message.content.strip()
+        usage = getattr(response, "usage", None)
+        t_in = getattr(usage, "prompt_tokens", 0) if usage else 0
+        t_out = getattr(usage, "completion_tokens", 0) if usage else 0
+        cost = estimate_cost(config, used_model, t_in, t_out)
     if quiet_day:
         briefing_text = QUIET_DAY_TEXT + "\n\n" + briefing_text
 
@@ -884,10 +931,8 @@ def run_writer():
         if _fn:
             briefing_text = _fn(briefing_text)
 
-    usage = getattr(response, "usage", None)
-    t_in = getattr(usage, "prompt_tokens", 0) if usage else 0
-    t_out = getattr(usage, "completion_tokens", 0) if usage else 0
-    cost = estimate_cost(config, used_model, t_in, t_out)
+    # t_in / t_out / cost were set above by whichever path ran (subscription => cost 0, flat; API =>
+    # estimate_cost). model_used / cost_usd land in agent_runs + briefings so the path is auditable.
     duration_ms = int((time.time() - start) * 1000)
 
     print(f"\n{'-' * 60}")

@@ -37,6 +37,7 @@ Thumbs.db
 # Real local config — *.example.* templates are committed; real instances stay local
 user_context.json
 config/whatsapp_deliveries.yaml
+config/chat_interaction.yaml
 
 # Private backlog — never commit
 BACKLOG.md
@@ -46,6 +47,9 @@ BACKLOG.md
 
 # Drop-report local store (spec §8.5) — runtime data, regenerated per brief
 data/drop_reports/
+
+# Run-state: single-generation locks + delivered-markers (local-only, ephemeral)
+.runstate/
 
 # Local audit notes + leftover cloud/scratch files — local-only, never committed
 CODEX_AUDIT.md
