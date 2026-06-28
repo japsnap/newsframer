@@ -3,7 +3,7 @@
 The dated, git-tracked record of what ships. Newest first. Written at `/logout`.
 
 ## 2026-06-28 — Firecrawl · topic classes (VC) · double-gen lock + idempotent delivery · gateway watchdog · writer-on-subscription · reply-system foundation
-_Big multi-day session. All shipped to the working tree; NOT committed (awaiting OK). Suite 44/44 throughout._
+_Big multi-day session. Suite 44/44 throughout. Committed + pushed to origin/main (`7e2a2af` feature bundle → `dd62345` WhatsApp dispatch fixes)._
 
 - **NF-B4 — Firecrawl scrape path for no-RSS sources (LIVE).** `agents/fetcher.fetch_web` now scrapes each no-RSS source's LISTING page via Firecrawl's clean-markdown API (parses `[title](url)` out of the markdown; strips images→alt; flattens multi-line titles), falling back to the old BeautifulSoup grab on ANY failure. Listing-page-only (1 call/source/run) → stays in the free tier. Config `firecrawl_enabled: true` (+ api_url/timeout/min_title/max_links). Live dry-run verified on the real TRT Global (60 articles); 2 bugs the live call exposed (CloudFront image URLs, polluted titles) fixed + test-locked. `tests/test_fetcher_firecrawl` (29). The 3 active scrape sources (TRT, Amnesty Evidence Lab, Delphi) now fetch content; CST still awaits its URL (NF-A4).
 
