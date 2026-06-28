@@ -409,6 +409,15 @@ def confirmed_message_id(rc, stdout):
     return m.group(1) if m else None
 
 
+def combine_messages(lang_texts, combine, sep):
+    """The actual WhatsApp messages to send for one chat. By default a multi-language chat is sent as
+    ONE message (its languages joined by `sep`) so the chat isn't flooded with one message per
+    language. `combine=False` (or a single language) returns the per-language list unchanged. Pure."""
+    if combine and len(lang_texts) > 1:
+        return [sep.join(lang_texts)]
+    return list(lang_texts)
+
+
 def maybe_send_worldcup(reg):
     """Append the World Cup message to the 11:00 dispatch (user-approved 2026-06-15).
     Runs AFTER the main WhatsApp brief has already sent, and is fully wrapped: any WC
@@ -588,21 +597,34 @@ def main():
         # TITLE+SOURCE into the secondary language(s) too. The PRIMARY (i==0) path is untouched.
         secondary_base = en_full if config.get("include_sources_in_secondary_language", False) else en_strip
         chat_ok = True  # did EVERY send for this chat confirm a messageId?
+        # Build the per-language texts, then send them as ONE message by default (a multi-language chat
+        # like EN+UR was getting one message PER language = "2 messages populating the chat").
+        # whatsapp_combine_languages: false restores the old one-message-per-language behaviour.
+        lang_texts = []
         for i, lang in enumerate(langs):
             base = en_full if i == 0 else secondary_base
             text = base if lang == "en" else translate(config, base, lang, translate_model, sb)[0]
             with open(out_file(name, lang), "w", encoding="utf-8") as f:
                 f.write(text)
             print(f"  [{name}/{lang}] {len(text)} chars -> {out_file(name, lang)}")
-            if args.send:
-                rc, o, e = send_whatsapp(text, account, target)
+            lang_texts.append(text)
+        messages = combine_messages(
+            lang_texts,
+            config.get("whatsapp_combine_languages", True),
+            config.get("whatsapp_language_separator", "\n\n────────\n\n"),
+        )
+        if len(messages) < len(lang_texts):
+            print(f"  [{name}] {len(lang_texts)} languages combined into 1 message ({len(messages[0])} chars).")
+        if args.send:
+            for msg in messages:
+                rc, o, e = send_whatsapp(msg, account, target)
                 mid = confirmed_message_id(rc, o)
                 print(f"    SENT rc={rc} messageId={mid} {o}")
                 if mid:
                     any_posted = True
                 else:
                     chat_ok = False
-                    send_alert(f"🚨 NewsFramer: WhatsApp send FAILED for {name}/{lang} "
+                    send_alert(f"🚨 NewsFramer: WhatsApp send FAILED for {name} "
                                f"(rc={rc}) — recorded NOTHING for {name}.")
         # §4.3: record this chat's delivered article_ids ONLY if EVERY send confirmed.
         if args.send and chat_ok and ids:

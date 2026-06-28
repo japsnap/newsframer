@@ -63,6 +63,16 @@ def test_collapses_excess_blank_lines():
     ok("collapse", "\n\n\n" not in wa.strip_sources("a\n\n\n\n\nb"))
 
 
+def test_combine_messages():
+    a, b = "EN brief", "UR brief"
+    # combine ON + 2 languages -> ONE joined message (was 2 messages flooding the chat)
+    ok("combined_one", wa.combine_messages([a, b], True, "\n--\n") == ["EN brief\n--\nUR brief"])
+    # single language -> unchanged, one message
+    ok("single_unchanged", wa.combine_messages([a], True, "\n--\n") == [a])
+    # combine OFF -> per-language list (old behaviour, reversible)
+    ok("off_per_language", wa.combine_messages([a, b], False, "\n--\n") == [a, b])
+
+
 def main():
     failed = 0
     for name, fn in sorted(globals().items()):
