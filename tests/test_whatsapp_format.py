@@ -63,14 +63,13 @@ def test_collapses_excess_blank_lines():
     ok("collapse", "\n\n\n" not in wa.strip_sources("a\n\n\n\n\nb"))
 
 
-def test_combine_messages():
-    a, b = "EN brief", "UR brief"
-    # combine ON + 2 languages -> ONE joined message (was 2 messages flooding the chat)
-    ok("combined_one", wa.combine_messages([a, b], True, "\n--\n") == ["EN brief\n--\nUR brief"])
-    # single language -> unchanged, one message
-    ok("single_unchanged", wa.combine_messages([a], True, "\n--\n") == [a])
-    # combine OFF -> per-language list (old behaviour, reversible)
-    ok("off_per_language", wa.combine_messages([a, b], False, "\n--\n") == [a, b])
+def test_md_strips_links():
+    # WhatsApp can't render markdown links -> strip [text](url) -> text so no raw URL leaks (the
+    # regression the user flagged: the writer's citation drifted to [title](url) — Source).
+    out = wa.md_to_whatsapp("[IRGC: Launched attacks](https://www.middleeasteye.net/live-blog/x) — Middle East Eye")
+    ok("link_text_kept", "IRGC: Launched attacks" in out)
+    ok("source_kept", "Middle East Eye" in out)
+    ok("no_url", "http" not in out and "](" not in out)
 
 
 def main():

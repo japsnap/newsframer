@@ -108,8 +108,6 @@ whatsapp_fresh_hours: 6        # an article published within this many hours cou
                                #   genuinely new story surfaces even if borderline (NF-C2 weight-fresh-higher).
 whatsapp_send_timeout_seconds: 120      # per-message gateway send timeout (openclaw message send)
 whatsapp_gap_stage_timeout_seconds: 1800  # per-stage timeout for each gap-refresh engine subprocess
-whatsapp_combine_languages: true        # send a multi-language chat (e.g. EN+UR) as ONE message instead of one-per-language (stops the chat being flooded with 2 messages). false = old per-language messages.
-whatsapp_language_separator: "\n\n────────\n\n"   # divider between languages when combined into one message
 language_labels:                # display labels per language code (WhatsApp "sources in <lang>" / translation header)
   ur: "Urdu (Urdu script)"
   ar: "Arabic"
@@ -370,7 +368,7 @@ surfaces:
     include_link: true       # attach the article URL
     link_style: hyperlink    # hyperlink = clickable source name, NO visible URL | plain = raw URL shown
   whatsapp:
-    theme_size: M            # independent of Telegram
+    theme_size: S            # independent of Telegram — S=800 body chars/theme (shorter than Telegram's M)
     per_category_theme_cap: 2  # item 6: max themes any one source-category may take in a WA brief (mirrors the Telegram bundle_theme_cap)
     show_source: true
     include_link: false      # WhatsApp: TITLE + SOURCE only, no link
