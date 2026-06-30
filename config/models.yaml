@@ -237,6 +237,12 @@ drop_report_content_chars: 3000
 
 # --- Batch / retry / output-truncation ---
 classifier_batch_size: 10
+# NF-ANALYST-BATCH: articles scored per analyst LLM call. >1 batches (sends the interests/
+# hypotheses context ~Nx fewer times -> ~halves Gemini input cost); 1 = the original
+# per-article path (byte-for-byte revert). LIVE = 10 (flipped 2026-06-30 after a read-only
+# per-article-vs-batched check on 15 real articles: mean rel diff 0.87, 93% label agreement
+# = equivalent within LLM noise). Revert instantly by setting back to 1.
+analyst_batch_size: 10
 analyst_max_retries: 3
 analyst_retry_backoff_seconds: 2
 analyst_reasoning_max_chars: 500

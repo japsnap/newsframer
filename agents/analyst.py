@@ -23,7 +23,7 @@ from litellm import completion
 from supabase import create_client
 from dotenv import load_dotenv
 
-from llm_json import parse_json_obj
+from llm_json import parse_json_obj, parse_json_list
 from llm_client import resilient_from_config  # 2026-06-22: timeout + fallback (Gemini-outage resilience)
 
 # Windows consoles default to cp1252 and raise UnicodeEncodeError when a print contains a
@@ -62,6 +62,27 @@ BREAKING_ACTIONABILITY_REL_THRESHOLD = int(_CFG.get("analyst_breaking_actionabil
 PERSPECTIVE_REL_THRESHOLD = int(_CFG.get("analyst_perspective_rel_threshold", 7))
 TOPIC_MAX_CHARS = int(_CFG.get("analyst_topic_max_chars", 40))
 MAX_TOPICS = int(_CFG.get("analyst_max_topics", 8))
+
+# NF-ANALYST-BATCH: batch-mode system instruction, appended after the per-article schema when
+# scoring >1 article per LLM call. Config-overridable (no-hardcoding rule); in-code default kept.
+_DEFAULT_BATCH_INSTRUCTION = (
+    "BATCH MODE: You will receive MULTIPLE articles below, each tagged with its own article_id. "
+    "Score EACH article independently using the schema above. "
+    "Return ONLY a JSON ARRAY with exactly one object per article, and copy that article's "
+    "article_id verbatim into an \"article_id\" field on its object. "
+    "Every input article must appear exactly once in the array. No markdown fences, no commentary."
+)
+BATCH_INSTRUCTION = _CFG.get("analyst_batch_instruction", _DEFAULT_BATCH_INSTRUCTION)
+
+
+def resolve_batch_size(config):
+    """How many articles to score per LLM call. Default 10. <=1 means the per-article path
+    (the documented, byte-for-byte revert to the original behaviour). A junk/missing value
+    falls back to the default rather than sinking the run."""
+    try:
+        return int(config.get("analyst_batch_size", 10))
+    except (TypeError, ValueError):
+        return 10
 
 
 def load_analyst_prompt():
@@ -223,6 +244,81 @@ def build_user_prompt(article, sources_map):
     )
 
 
+def build_batch_user_prompt(batch, sources_map):
+    """Batch variant of build_user_prompt: lists N articles, each tagged with its article_id,
+    and asks for a JSON ARRAY (one object per article). Mirrors the classifier's batch shape."""
+    lines = [f"Analyze the following {len(batch)} articles. Return JSON only.\n"]
+    for art in batch:
+        src = sources_map.get(art.get("source_id"), {})
+        snippet = (art.get("content_raw") or "")[:CONTENT_SNIPPET_CHARS].replace("\n", " ")
+        lines.append(
+            f"---\n"
+            f"article_id: {art['id']}\n"
+            f"source: {src.get('name','unknown')} ({src.get('category','unknown')})\n"
+            f"bias_score: {src.get('publisher_bias_score', 0.0)}\n"
+            f"branch: {art.get('branch')}\n"
+            f"published_at: {art.get('published_at')}\n"
+            f"title: {art.get('title')}\n"
+            f"content: {snippet}\n"
+        )
+    lines.append(
+        "---\n"
+        "Respond with a JSON ARRAY only — one object per article, each carrying its article_id."
+    )
+    return "\n".join(lines)
+
+
+def map_batch_results(batch, parsed_list):
+    """Pure: map an LLM batch reply back to the batch by article_id.
+
+    Returns (results_by_id, missing_ids):
+      - results_by_id: {article_id -> result dict} for ids that belong to the batch (first wins
+        on a duplicate; later repeats ignored). Hallucinated ids (not in the batch) are dropped.
+      - missing_ids: batch articles the LLM omitted — so the caller can retry them per-article
+        rather than silently losing them from scoring (data-loss guard, like the classifier).
+    """
+    batch_ids = {a["id"] for a in batch}
+    results_by_id = {}
+    if isinstance(parsed_list, list):
+        for r in parsed_list:
+            if not isinstance(r, dict):
+                continue
+            aid = r.get("article_id")
+            if aid not in batch_ids or aid in results_by_id:
+                continue
+            results_by_id[aid] = r
+    missing_ids = [a["id"] for a in batch if a["id"] not in results_by_id]
+    return results_by_id, missing_ids
+
+
+def analyze_batch(batch, context_block, sources_map, llm):
+    """Score a batch of articles in ONE LLM call (with retry). Returns (parsed_list, t_in, t_out).
+    System = the per-article schema + the BATCH_INSTRUCTION + the user-context block. The reply is
+    coerced to a list (a stray single-object / fenced / prose-wrapped reply degrades gracefully)."""
+    user_prompt = build_batch_user_prompt(batch, sources_map)
+    system_text = load_analyst_prompt() + "\n\n" + BATCH_INSTRUCTION + "\n\n" + context_block
+    messages = [
+        {"role": "system", "content": system_text},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    last_err = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response, _used = llm.complete(messages, temperature=LLM_TEMPERATURE)
+            raw = response.choices[0].message.content
+            parsed = parse_json_list(raw)
+            usage = getattr(response, "usage", None)
+            t_in = getattr(usage, "prompt_tokens", 0) if usage else 0
+            t_out = getattr(usage, "completion_tokens", 0) if usage else 0
+            return parsed, t_in, t_out
+        except (json.JSONDecodeError, Exception) as e:
+            last_err = e
+            if attempt < MAX_RETRIES:
+                time.sleep(RETRY_BACKOFF_SECONDS * attempt)
+    raise last_err
+
+
 def analyze_one(article, context_block, sources_map, llm):
     """LLM call with retry. Returns (parsed_dict, tokens_in, tokens_out). `llm` is a ResilientLLM:
     each call is hard-bounded by a timeout and falls back to a second model if the primary is
@@ -321,6 +417,52 @@ def validate_and_clean(parsed, hypothesis_ids, article):
     }
 
 
+def score_articles(articles, context_block, sources_map, hypothesis_ids, llm, batch_size):
+    """Score every article, BATCHED (batch_size articles per LLM call), with a per-article
+    fallback for any article the batch omits OR a whole chunk whose batch call fails — so a
+    batch slip can never silently drop articles from scoring (the data-loss guard). DB-free +
+    llm-injected, so the routing is unit-testable.
+
+    Returns (rows, failed_ids, total_in, total_out):
+      rows       : list of (article, cleaned_dict) ready to insert
+      failed_ids : article_ids that could not be scored even per-article (loud; retried next run)
+    """
+    rows = []
+    failed_ids = []
+    total = {"in": 0, "out": 0}
+
+    def _score_one(article):
+        try:
+            parsed, t_in, t_out = analyze_one(article, context_block, sources_map, llm)
+            total["in"] += t_in
+            total["out"] += t_out
+            rows.append((article, validate_and_clean(parsed, hypothesis_ids, article)))
+        except Exception as e:
+            print(f"  analyst per-article FAILED: {e} | {article.get('title','')[:60]}")
+            failed_ids.append(article["id"])
+
+    by_id = {a["id"]: a for a in articles}
+    for i in range(0, len(articles), batch_size):
+        chunk = articles[i:i + batch_size]
+        try:
+            parsed, t_in, t_out = analyze_batch(chunk, context_block, sources_map, llm)
+            total["in"] += t_in
+            total["out"] += t_out
+            results_by_id, missing_ids = map_batch_results(chunk, parsed)
+            for art in chunk:
+                res = results_by_id.get(art["id"])
+                if res is not None:
+                    rows.append((art, validate_and_clean(res, hypothesis_ids, art)))
+            for mid in missing_ids:   # the LLM omitted these — re-score each individually
+                _score_one(by_id[mid])
+        except Exception as e:
+            print(f"  analyst batch FAILED ({len(chunk)} articles), falling back per-article: {e}")
+            for art in chunk:
+                _score_one(art)
+
+    return rows, failed_ids, total["in"], total["out"]
+
+
 def estimate_cost(config, model, tokens_in, tokens_out):
     pricing = (config.get("pricing") or {}).get(model)
     if not pricing:
@@ -337,10 +479,12 @@ def run_analyst():
                                 "anthropic/claude-haiku-4-5", label="analyst")
     cap = int(config.get("analyst_max_articles_per_run", 300))
     window_hours = int(config.get("analyst_window_hours", 30))
+    batch_size = resolve_batch_size(config)
     start = time.time()
 
     print("NewsFramer Analyst starting...")
-    print(f"  Model: {model} (fallback: {llm.fallback or 'none'}, timeout {int(llm.timeout_s)}s)  |  Cap: {cap}")
+    print(f"  Model: {model} (fallback: {llm.fallback or 'none'}, timeout {int(llm.timeout_s)}s)  "
+          f"|  Cap: {cap}  |  Batch: {batch_size}" + ("  (per-article)" if batch_size <= 1 else ""))
 
     context = load_user_context(sb)
     interests = context["interests"]
@@ -362,34 +506,53 @@ def run_analyst():
     total_in = 0
     total_out = 0
 
-    for i, article in enumerate(articles, 1):
-        try:
-            parsed, t_in, t_out = analyze_one(article, context_block, sources_map, llm)
-            total_in += t_in
-            total_out += t_out
-            cleaned = validate_and_clean(parsed, hypothesis_ids, article)
+    def _insert(article, cleaned):
+        sb.table("analyst_scores").insert({
+            "article_id": article["id"],
+            "relevance_score": cleaned["relevance_score"],
+            "label": cleaned["label"],
+            "hypotheses": cleaned["hypotheses"],
+            "topics": cleaned["topics"],
+            "actionability": cleaned["actionability"],
+            "perspective_invited": cleaned["perspective_invited"],
+            "reasoning": cleaned["reasoning"],
+            "differentiator": cleaned["differentiator"],
+            "model_used": model,
+        }).execute()
 
-            sb.table("analyst_scores").insert({
-                "article_id": article["id"],
-                "relevance_score": cleaned["relevance_score"],
-                "label": cleaned["label"],
-                "hypotheses": cleaned["hypotheses"],
-                "topics": cleaned["topics"],
-                "actionability": cleaned["actionability"],
-                "perspective_invited": cleaned["perspective_invited"],
-                "reasoning": cleaned["reasoning"],
-                "differentiator": cleaned["differentiator"],
-                "model_used": model,
-            }).execute()
-
-            inserted += 1
-            print(f"[{i}/{len(articles)}] rel={cleaned['relevance_score']} "
-                  f"label={cleaned['label']:22} act={cleaned['actionability']} "
-                  f"hyps={len(cleaned['hypotheses'])} | {article['title'][:60]}")
-        except Exception as e:
-            failed += 1
-            print(f"[{i}/{len(articles)}] FAILED: {e} | {article.get('title','')[:60]}")
-            continue
+    if batch_size > 1:
+        # Batched path (NF-ANALYST-BATCH): ~len/batch_size LLM calls instead of one per article;
+        # any article the batch omits / a failed chunk falls back to per-article (no data loss).
+        rows, failed_ids, total_in, total_out = score_articles(
+            articles, context_block, sources_map, hypothesis_ids, llm, batch_size)
+        failed = len(failed_ids)
+        for idx, (article, cleaned) in enumerate(rows, 1):
+            try:
+                _insert(article, cleaned)
+                inserted += 1
+                print(f"[{idx}/{len(rows)}] rel={cleaned['relevance_score']} "
+                      f"label={cleaned['label']:22} act={cleaned['actionability']} "
+                      f"hyps={len(cleaned['hypotheses'])} | {article['title'][:60]}")
+            except Exception as e:
+                failed += 1
+                print(f"[insert {idx}] FAILED: {e} | {article.get('title','')[:60]}")
+    else:
+        # Per-article path — byte-for-byte the original behaviour (analyst_batch_size=1 = revert).
+        for i, article in enumerate(articles, 1):
+            try:
+                parsed, t_in, t_out = analyze_one(article, context_block, sources_map, llm)
+                total_in += t_in
+                total_out += t_out
+                cleaned = validate_and_clean(parsed, hypothesis_ids, article)
+                _insert(article, cleaned)
+                inserted += 1
+                print(f"[{i}/{len(articles)}] rel={cleaned['relevance_score']} "
+                      f"label={cleaned['label']:22} act={cleaned['actionability']} "
+                      f"hyps={len(cleaned['hypotheses'])} | {article['title'][:60]}")
+            except Exception as e:
+                failed += 1
+                print(f"[{i}/{len(articles)}] FAILED: {e} | {article.get('title','')[:60]}")
+                continue
 
     used_model = llm.effective_model()   # the fallback if the breaker opened, else the primary
     duration_ms = int((time.time() - start) * 1000)

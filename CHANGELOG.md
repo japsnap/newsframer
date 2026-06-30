@@ -2,6 +2,9 @@
 
 The dated, git-tracked record of what ships. Newest first. Written at `/logout`.
 
+## 2026-06-30 (RC session)
+- **NF-ANALYST-BATCH — the analyst scores ~10 articles per LLM call (was ONE call per article).** `agents/analyst.py` gains a batched path (`build_batch_user_prompt` → a JSON array keyed by `article_id` → `map_batch_results` → the unchanged per-article `validate_and_clean`, mirroring the classifier). Any article the batch omits, or a whole chunk whose batch call fails, falls back to the original per-article path — so a batch slip can never silently drop articles from scoring. Config `analyst_batch_size` (default 10; **`1` = the original per-article path, byte-for-byte = the instant revert**). LIVE at 10. Cuts the analyst's INPUT cost: the shared interests/hypotheses block is now sent ~15× instead of ~150× per run (measured ~81% fewer input tokens on a 10-article sample; the exact ratio scales with article length). Read-only per-article-vs-batched check on real articles (no DB writes): scores equivalent within LLM noise (mean rel diff 0.87–1.5, label agreement 80–93%), and the batched path was *more stable* than the per-article one — the old path noisily under-scored major geopolitics in isolation (same story scored 7 then 4 across runs) while the batch held it at 7, consistent with the prompt's calibration rule, which assumes a batch. `tests/test_analyst_batch.py` (47 checks); suite 45/45.
+
 ## 2026-06-28 — Firecrawl · topic classes (VC) · double-gen lock + idempotent delivery · gateway watchdog · writer-on-subscription · reply-system foundation
 _Big multi-day session. Suite 44/44 throughout. Committed + pushed to origin/main (`7e2a2af` feature bundle → `dd62345` WhatsApp dispatch fixes)._
 
