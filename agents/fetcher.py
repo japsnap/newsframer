@@ -325,10 +325,11 @@ def deduplicate_batch(articles: list) -> list:
             unique.append(a)
     return unique
 
-# --- item 5 (2026-06-22): three fetch tiers (full / normal / light), config-driven ---
+# --- item 5 (2026-06-22): three fetch tiers, config-driven. NF-FETCH-LIGHT (2026-06-30):
+#     tiers renamed/revalued heavy / medium / light = {30,15,10}; fallback profile = 'medium'. ---
 def resolve_fetch_caps(config):
     """Pick the per-source cap for the active fetch profile. Three tiers in config['fetch_profiles']
-    (full / normal / light, default {50,30,10}); a missing/unknown profile falls back to 'normal'.
+    (heavy / medium / light, default {30,15,10}); a missing/unknown profile falls back to 'medium'.
     Returns (profile, max_per_source, safety_ceiling). Pure + tolerant of a hollow/broken config."""
     def _cfg(key, default):
         try:
@@ -336,16 +337,16 @@ def resolve_fetch_caps(config):
             return default if v is None else v
         except Exception:
             return default
-    profiles = _cfg("fetch_profiles", {"full": 50, "normal": 30, "light": 10})
+    profiles = _cfg("fetch_profiles", {"heavy": 30, "medium": 15, "light": 10})
     if not isinstance(profiles, dict) or not profiles:
-        profiles = {"full": 50, "normal": 30, "light": 10}
-    profile = str(_cfg("fetch_profile", "normal")).strip().lower()
+        profiles = {"heavy": 30, "medium": 15, "light": 10}
+    profile = str(_cfg("fetch_profile", "medium")).strip().lower()
     if profile not in profiles:
-        profile = "normal" if "normal" in profiles else next(iter(profiles))
+        profile = "medium" if "medium" in profiles else next(iter(profiles))
     try:
-        cap = int(profiles.get(profile, 30))
+        cap = int(profiles.get(profile, 15))
     except (TypeError, ValueError):
-        cap = 30
+        cap = 15
     return (profile, cap, int(_cfg("fetch_safety_ceiling", 3000)))
 
 

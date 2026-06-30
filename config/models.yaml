@@ -46,10 +46,10 @@ fetch_safety_ceiling: 3000  # pure runaway guard: only if a run exceeds this do 
 # NEWEST N items per source — the fetcher now sorts entries by published_at DESC BEFORE capping
 # (RSS feed order is not always newest-first). Flip `fetch_profile` to switch; no code edit.
 # (Supersedes the old max_articles_per_source / fetch_light_* keys.)
-fetch_profile: normal           # full | normal | light  — LIVE = normal (30/source)
+fetch_profile: light            # heavy | medium | light  — LIVE = light (10/source); NF-FETCH-LIGHT 2026-06-30 (was normal=30). Revert: set heavy/medium/light back or pick medium.
 fetch_profiles:
-  full: 50
-  normal: 30
+  heavy: 30
+  medium: 15
   light: 10
 
 # --- Firecrawl scrape fallback (NF-B4, spec §3.3) --------------------------------------------

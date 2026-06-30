@@ -1,6 +1,7 @@
 """
-Tests for item 5 (2026-06-22) — fetcher.resolve_fetch_caps (three tiers) + fetch_rss newest-first.
-Pure: no network, no DB. full=50 / normal=30 (LIVE) / light=10; unknown/missing -> normal. fetch_rss
+Tests for fetcher.resolve_fetch_caps (three tiers) + fetch_rss newest-first.
+Pure: no network, no DB. NF-FETCH-LIGHT (2026-06-30): tiers renamed/revalued to
+heavy=30 / medium=15 / light=10 (LIVE); unknown/missing/broken -> medium. fetch_rss
 must keep the NEWEST N per source (RSS feed order is not always newest-first).
 
     venv\\Scripts\\python.exe tests\\test_fetcher_profile.py
@@ -23,53 +24,53 @@ def ok(name, cond):
 
 
 LIVE_CFG = {
-    "fetch_profile": "normal",
-    "fetch_profiles": {"full": 50, "normal": 30, "light": 10},
+    "fetch_profile": "light",
+    "fetch_profiles": {"heavy": 30, "medium": 15, "light": 10},
     "fetch_safety_ceiling": 3000,
 }
 
 
-def test_normal_is_live_30():
+def test_light_is_live_10():
     profile, mps, ceil = f.resolve_fetch_caps(LIVE_CFG)
-    ok("normal_label", profile == "normal")
-    ok("normal_30", mps == 30)
+    ok("light_label", profile == "light")
+    ok("light_10", mps == 10)
     ok("ceiling_3000", ceil == 3000)
 
 
-def test_full_is_50():
-    profile, mps, _ = f.resolve_fetch_caps(dict(LIVE_CFG, fetch_profile="full"))
-    ok("full_50", profile == "full" and mps == 50)
+def test_heavy_is_30():
+    profile, mps, _ = f.resolve_fetch_caps(dict(LIVE_CFG, fetch_profile="heavy"))
+    ok("heavy_30", profile == "heavy" and mps == 30)
 
 
-def test_light_is_10():
-    profile, mps, _ = f.resolve_fetch_caps(dict(LIVE_CFG, fetch_profile="light"))
-    ok("light_10", profile == "light" and mps == 10)
+def test_medium_is_15():
+    profile, mps, _ = f.resolve_fetch_caps(dict(LIVE_CFG, fetch_profile="medium"))
+    ok("medium_15", profile == "medium" and mps == 15)
 
 
 def test_case_and_space_insensitive():
-    profile, mps, _ = f.resolve_fetch_caps(dict(LIVE_CFG, fetch_profile="  FULL "))
-    ok("full_normalized", profile == "full" and mps == 50)
+    profile, mps, _ = f.resolve_fetch_caps(dict(LIVE_CFG, fetch_profile="  HEAVY "))
+    ok("heavy_normalized", profile == "heavy" and mps == 30)
 
 
-def test_unknown_falls_back_to_normal():
+def test_unknown_falls_back_to_medium():
     profile, mps, _ = f.resolve_fetch_caps(dict(LIVE_CFG, fetch_profile="turbo"))
-    ok("unknown_normal", profile == "normal" and mps == 30)
+    ok("unknown_medium", profile == "medium" and mps == 15)
 
 
-def test_missing_profile_defaults_normal():
-    profile, mps, _ = f.resolve_fetch_caps({"fetch_profiles": {"full": 50, "normal": 30, "light": 10}})
-    ok("missing_normal", profile == "normal" and mps == 30)
+def test_missing_profile_defaults_medium():
+    profile, mps, _ = f.resolve_fetch_caps({"fetch_profiles": {"heavy": 30, "medium": 15, "light": 10}})
+    ok("missing_medium", profile == "medium" and mps == 15)
 
 
 def test_empty_config_safe_defaults():
     profile, mps, ceil = f.resolve_fetch_caps({})
-    ok("empty_normal", profile == "normal" and mps == 30 and ceil == 3000)
+    ok("empty_medium", profile == "medium" and mps == 15 and ceil == 3000)
 
 
 def test_none_values_use_defaults():
     profile, mps, ceil = f.resolve_fetch_caps(
         {"fetch_profile": None, "fetch_profiles": None, "fetch_safety_ceiling": None})
-    ok("none_normal", profile == "normal" and mps == 30 and ceil == 3000)
+    ok("none_medium", profile == "medium" and mps == 15 and ceil == 3000)
 
 
 def test_ceiling_is_int():
@@ -82,7 +83,7 @@ def test_tolerant_of_broken_config():
         def get(self, *a):
             raise RuntimeError("boom")
     profile, mps, ceil = f.resolve_fetch_caps(Boom())
-    ok("broken_safe", profile == "normal" and mps == 30 and ceil == 3000)
+    ok("broken_safe", profile == "medium" and mps == 15 and ceil == 3000)
 
 
 class _Entry(dict):
