@@ -245,8 +245,8 @@ classifier_batch_size: 10
 analyst_batch_size: 10
 analyst_max_retries: 3
 analyst_retry_backoff_seconds: 2
-analyst_reasoning_max_chars: 500
-analyst_differentiator_max_chars: 300
+analyst_reasoning_max_chars: 200   # NF-ANALYST-TRIM 2026-06-30: 500->200 (output ~4x input cost on Gemini × ~150 articles/run); revert = 500
+analyst_differentiator_max_chars: 150   # NF-ANALYST-TRIM 2026-06-30: 300->150; revert = 300
 analyst_breaking_keywords: ["breaking", "just in", "alert", "urgent", "live:"]  # title keywords that bump actionability (validate_and_clean)
 analyst_actionability_rel_threshold: 8           # rel >= this + IMMEDIATE branch -> actionability bumped to 2
 analyst_breaking_actionability_rel_threshold: 7  # rel >= this + a breaking keyword -> actionability bumped to 2
