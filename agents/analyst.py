@@ -25,6 +25,7 @@ from dotenv import load_dotenv
 
 from llm_json import parse_json_obj, parse_json_list
 from llm_client import resilient_from_config  # 2026-06-22: timeout + fallback (Gemini-outage resilience)
+import cc_writer  # NF-ANALYST-SUB: reuse the writer's `claude -p` subscription seam (claude -p)
 
 # Windows consoles default to cp1252 and raise UnicodeEncodeError when a print contains a
 # non-Latin character (Arabic/CJK/emoji titles are common now that global wires feed in).
@@ -349,6 +350,81 @@ def analyze_one(article, context_block, sources_map, llm):
     raise last_err
 
 
+# --- NF-ANALYST-SUB: route scoring through the flat Max subscription (claude -p) -------------
+class _SubMsg:
+    def __init__(self, content): self.message = type("M", (), {"content": content})()
+class _SubUsage:
+    def __init__(self, t_in, t_out):
+        self.prompt_tokens = t_in
+        self.completion_tokens = t_out
+class _SubResponse:
+    """Mimics the litellm response shape the analyst reads (choices[0].message.content + usage)."""
+    def __init__(self, content, t_in, t_out):
+        self.choices = [_SubMsg(content)]
+        self.usage = _SubUsage(t_in, t_out)
+
+
+class SubscriptionLLM:
+    """Routes analyst scoring through `claude -p` (the flat Max subscription) and falls back to the
+    wrapped API ResilientLLM on ANY failure — so the analyst can run $0-metered while never dropping a
+    call. Exposes the surface run_analyst reads (fallback / timeout_s / used_fallback / effective_model)
+    by proxying the API llm. Same .complete(messages, temperature) signature as ResilientLLM, so both
+    analyze_one and analyze_batch use it unchanged."""
+    def __init__(self, api_llm, model="haiku", timeout=600, max_thinking_tokens=0):
+        self.api = api_llm
+        self.model = model
+        self.timeout = int(timeout)
+        self.max_thinking_tokens = int(max_thinking_tokens)
+        self.used_subscription = False
+        self.used_api_fallback = False
+
+    def complete(self, messages, temperature=None):
+        system = "\n\n".join(m["content"] for m in messages if m.get("role") == "system")
+        user = "\n\n".join(m["content"] for m in messages if m.get("role") == "user")
+        try:
+            text, _model_used, t_in, t_out = cc_writer.complete_via_subscription(
+                system, user, model=self.model, timeout=self.timeout,
+                max_thinking_tokens=self.max_thinking_tokens)
+            self.used_subscription = True
+            return _SubResponse(text, t_in, t_out), "subscription"
+        except Exception as e:
+            self.used_api_fallback = True
+            print(f"  analyst SUBSCRIPTION failed ({type(e).__name__}: {str(e)[:120]}); API fallback")
+            return self.api.complete(messages, temperature=temperature)
+
+    @property
+    def fallback(self):
+        return self.api.fallback
+
+    @property
+    def timeout_s(self):
+        return self.api.timeout_s
+
+    @property
+    def used_fallback(self):
+        return bool(getattr(self.api, "used_fallback", False) or self.used_api_fallback)
+
+    def effective_model(self):
+        # An API fallback (even once) overrides; otherwise the subscription model. The
+        # `subscription:` prefix makes run_analyst force cost=0 (flat plan, no metered $).
+        if self.used_api_fallback:
+            return self.api.effective_model()
+        return f"subscription:{self.model}"
+
+
+def maybe_wrap_subscription(api_llm, config):
+    """If `analyst_use_subscription` is on, wrap the API llm so scoring runs via `claude -p` (flat Max
+    plan) with an API fallback. Default off -> returns api_llm unchanged (today's API-only behaviour)."""
+    if not bool(config.get("analyst_use_subscription", False)):
+        return api_llm
+    return SubscriptionLLM(
+        api_llm,
+        model=config.get("analyst_subscription_model", "haiku"),
+        timeout=int(config.get("analyst_subscription_timeout_seconds", 600)),
+        max_thinking_tokens=int(config.get("analyst_subscription_max_thinking_tokens", 0)),
+    )
+
+
 VALID_LABELS = {"CONFIRMS_HYPOTHESIS", "CHALLENGES_HYPOTHESIS", "NEW_SIGNAL", "NEUTRAL"}
 
 
@@ -477,6 +553,7 @@ def run_analyst():
     model = config.get("analyst_model", "anthropic/claude-haiku-4-5")
     llm = resilient_from_config(config, "analyst_model", "analyst_fallback_model",
                                 "anthropic/claude-haiku-4-5", label="analyst")
+    llm = maybe_wrap_subscription(llm, config)   # NF-ANALYST-SUB: claude -p path if enabled (default off)
     cap = int(config.get("analyst_max_articles_per_run", 300))
     window_hours = int(config.get("analyst_window_hours", 30))
     batch_size = resolve_batch_size(config)
@@ -485,6 +562,8 @@ def run_analyst():
     print("NewsFramer Analyst starting...")
     print(f"  Model: {model} (fallback: {llm.fallback or 'none'}, timeout {int(llm.timeout_s)}s)  "
           f"|  Cap: {cap}  |  Batch: {batch_size}" + ("  (per-article)" if batch_size <= 1 else ""))
+    if isinstance(llm, SubscriptionLLM):
+        print(f"  Subscription: ON (claude -p, model={llm.model}, API fallback)")
 
     context = load_user_context(sb)
     interests = context["interests"]
@@ -556,7 +635,8 @@ def run_analyst():
 
     used_model = llm.effective_model()   # the fallback if the breaker opened, else the primary
     duration_ms = int((time.time() - start) * 1000)
-    cost = estimate_cost(config, used_model, total_in, total_out)
+    # Subscription = flat Max plan, no metered $ (mirrors the writer); API path = estimate.
+    cost = 0.0 if str(used_model).startswith("subscription") else estimate_cost(config, used_model, total_in, total_out)
     status = "success" if failed == 0 else "partial"
     err = f"{failed} article(s) failed" if failed else None
     if llm.used_fallback:   # observability: the primary provider was down this run

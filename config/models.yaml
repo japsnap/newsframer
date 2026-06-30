@@ -138,6 +138,13 @@ writer_use_subscription: true         # true = try the subscription (claude -p) 
 writer_subscription_model: "haiku"    # Claude Code model alias — haiku matches the API writer model (claude-haiku-4-5) and is fast on quota
 writer_subscription_timeout_seconds: 600
 writer_subscription_max_thinking_tokens: 0   # 0 DISABLES Claude Code's extended thinking — REQUIRED, else the headless call loops/hangs (>600s) on the big brief synthesis; with it ~70s
+# --- Analyst on subscription (NF-ANALYST-SUB) — same claude -p seam as the writer, for the analyst's
+# scoring calls. DEFAULT OFF (API only = today). Safe to enable only WITH batching on (analyst_batch_size
+# >1), or it spawns ~150 claude -p subprocesses/run instead of ~15. ANY failure falls back to the API.
+analyst_use_subscription: false       # true = try the subscription (claude -p) first per LLM call, API fallback. false = API (today).
+analyst_subscription_model: "haiku"   # Claude Code model alias — matches the API analyst model family
+analyst_subscription_timeout_seconds: 600
+analyst_subscription_max_thinking_tokens: 0   # 0 DISABLES Claude Code extended thinking (REQUIRED — else the headless call hangs)
 writer_primary_language: "en"
 writer_min_relevance: 6
 writer_relevance_floor: 4              # §4.5: backoff may lower the threshold down to here, within the 24h window
