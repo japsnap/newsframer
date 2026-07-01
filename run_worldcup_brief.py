@@ -77,16 +77,28 @@ def load_registry():
 
 
 def build(html, now, cfg=None):
-    """(payload, formatted message). Pure given html+now+cfg — unit-testable. Reads the
-    display-tz offset/label and the reply line from config (defaults reproduce current)."""
+    """(payload, formatted message). Pure given html+now+cfg — unit-testable. Auto-detects the
+    KNOCKOUT stage (group stage over) and renders the round-based message (winners, eliminated,
+    through / yet-to-play); falls back to the group-stage view otherwise. `worldcup_stage`
+    (auto|group|knockout) can force either. Reads display-tz + reply line from config."""
     cfg = cfg or {}
-    rw = int(cfg.get("worldcup_result_window_hours", 24))
-    fw = int(cfg.get("worldcup_fixture_window_hours", 24))
-    lw = int(cfg.get("worldcup_live_window_hours", 4))
     off = cfg.get("worldcup_display_utc_offset_hours", 5)
     off = int(off) if off is not None else None
     label = cfg.get("worldcup_display_tz_label", "PKT / UTC+5")
     reply = cfg.get("worldcup_reply_line", "")
+    lw = int(cfg.get("worldcup_live_window_hours", 4))
+
+    stage = str(cfg.get("worldcup_stage", "auto")).lower()
+    if stage != "group":
+        krw = int(cfg.get("worldcup_ko_result_window_hours", 48))
+        kfw = int(cfg.get("worldcup_ko_fixture_window_hours", 48))
+        kpay = wd.build_knockout_payload(html, now, krw, kfw, lw)
+        if stage == "knockout" or kpay.get("current_round") or kpay.get("eliminated"):
+            msg = wf.format_knockout_message(kpay, tz_offset_hours=off, tz_label=label, reply_line=reply)
+            return kpay, msg
+
+    rw = int(cfg.get("worldcup_result_window_hours", 24))
+    fw = int(cfg.get("worldcup_fixture_window_hours", 24))
     pay = wd.build_payload(html, now, rw, fw, lw)
     msg = wf.format_worldcup_message(
         pay["results"], pay["standings"], pay["fixtures"], live=pay.get("live"),

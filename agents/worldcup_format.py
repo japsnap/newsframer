@@ -205,3 +205,107 @@ def format_worldcup_message(results, standings, fixtures, live=None, wrap_up=Non
     if reply_line and reply_line.strip():
         msg += "\n\n" + reply_line.strip()
     return msg
+
+
+# --- Knockout stage rendering (post-group-stage redesign) ------------------
+def _flag_name(name):
+    """'🇫🇷 France' — the flag (from the name) plus the name; just the name if no flag maps."""
+    cc = COUNTRY_ISO2.get((name or "").strip().lower(), "")
+    fl = flag_from_iso2(cc)
+    return f"{fl} {name}".strip() if fl else (name or "")
+
+
+def format_ko_result(match):
+    """A knockout result with a CLEAR WINNER: 'winner beat loser score' (winner first, score
+    read from the winner's side). A draw resolved on penalties is marked '(pens)'. If the winner
+    is unknown (a tie whose advancement isn't on the page yet), fall back to a neutral score line."""
+    match = match or {}
+    h, a = match.get("home", {}), match.get("away", {})
+    hs, as_ = match.get("home_score"), match.get("away_score")
+    hn, an = _name(h), _name(a)
+    winner = match.get("winner")
+    if winner in (hn, an) and hs is not None and as_ is not None:
+        if winner == hn:
+            wn, ln, wf_, lf_, ws, ls = hn, an, flag(h), flag(a), hs, as_
+        else:
+            wn, ln, wf_, lf_, ws, ls = an, hn, flag(a), flag(h), as_, hs
+        pens = " (pens)" if ws == ls else ""
+        line = " ".join(p for p in (wf_, wn, "beat", ln, lf_) if p) + f" {ws}–{ls}{pens}"
+    else:
+        score = f"{hs}–{as_}" if hs is not None and as_ is not None else "vs"
+        line = " ".join(p for p in (flag(h), hn, score, an, flag(a)) if p)
+    home_g, away_g = _goals_str(match.get("goals"), "home"), _goals_str(match.get("goals"), "away")
+    if home_g or away_g:
+        line += "\n  ⚽ " + "  |  ".join(p for p in (home_g, away_g) if p)
+    return line
+
+
+def format_ko_results(matches):
+    if not matches:
+        return ""
+    return "⚽ *Results*\n" + "\n".join(format_ko_result(m) for m in matches)
+
+
+def format_ko_live(live):
+    """In-progress matches — the result lands in the NEXT update (your 'to be announced' ask)."""
+    if not live:
+        return ""
+    out = ["🔴 *Playing now* — result in the next update"]
+    for fx in live:
+        h, a = fx.get("home", {}), fx.get("away", {})
+        out.append(" ".join(p for p in (flag(h), _name(h), "vs", _name(a), flag(a)) if p))
+    return "\n".join(out)
+
+
+def format_ko_fixtures(fixtures, tz_offset_hours=None, tz_label=""):
+    if not fixtures:
+        return ""
+    header = "⏭ *Next up*"
+    if tz_label:
+        header += f" _(kickoff {tz_label})_"
+    out = [header]
+    for fx in fixtures:
+        h, a = fx.get("home", {}), fx.get("away", {})
+        ko = ""
+        if tz_offset_hours is not None:
+            ko = kickoff_in_tz(fx.get("date"), fx.get("kickoff", ""), tz_offset_hours)
+        ko = ko or fx.get("kickoff", "")
+        line = " ".join(p for p in (flag(h), _name(h), "vs", _name(a), flag(a)) if p)
+        out.append(f"{line} — {ko}" if ko else line)
+    return "\n".join(out)
+
+
+def format_eliminated(teams):
+    """Cumulative knocked-out list, NEWEST FIRST (the caller orders it)."""
+    if not teams:
+        return ""
+    return "❌ *Knocked out* _(newest first)_\n" + " · ".join(_flag_name(t) for t in teams)
+
+
+def format_still_alive(through, yet, current_round, next_round):
+    """Still-alive split in two: teams already THROUGH to the next round, and teams YET TO PLAY
+    the current round."""
+    blocks = []
+    if through:
+        blocks.append(f"🟢 *Through to {next_round}*\n" + " · ".join(_flag_name(t) for t in through))
+    if yet:
+        blocks.append(f"⏳ *{current_round} — yet to play*\n" + " · ".join(_flag_name(t) for t in yet))
+    return "\n\n".join(blocks)
+
+
+def format_knockout_message(payload, tz_offset_hours=None, tz_label="", reply_line=""):
+    """Assemble the knockout WhatsApp message: round header -> results (with winners) -> playing
+    now -> next up -> knocked out -> still alive (through / yet to play). No group tables."""
+    p = payload or {}
+    cur = p.get("current_round") or "Knockout stage"
+    parts = [f"🏆 *World Cup 2026 — {cur}*",
+             format_ko_results(p.get("results") or []),
+             format_ko_live(p.get("live") or []),
+             format_ko_fixtures(p.get("fixtures") or [], tz_offset_hours, tz_label),
+             format_eliminated(p.get("eliminated") or []),
+             format_still_alive(p.get("through") or [], p.get("yet_to_play") or [],
+                                cur, p.get("next_round") or "the next round")]
+    msg = "\n\n".join(x for x in parts if x)
+    if reply_line and reply_line.strip():
+        msg += "\n\n" + reply_line.strip()
+    return msg

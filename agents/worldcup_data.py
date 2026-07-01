@@ -242,3 +242,281 @@ def build_payload(html, now, result_window_hours=24, fixture_window_hours=24, li
             elif d is not None and 0 <= (d - today).days <= fd:
                 fixtures.append(entry)
     return {"results": results, "live": live, "standings": parse_standings(html), "fixtures": fixtures}
+
+
+# --- Knockout stage (post-group-stage redesign) ----------------------------
+# FIFA fixed match numbering for the 48-team 2026 bracket: group stage = 1-72, then
+# R32 = 73-88 (16), R16 = 89-96 (8), QF = 97-100, SF = 101-102, 3rd place = 103, Final = 104.
+KO_SEQUENCE = ["Round of 32", "Round of 16", "Quarter-finals", "Semi-finals", "Final"]
+
+
+def round_for_match_number(n):
+    """Knockout round name for a FIFA match number (None for group-stage / unknown)."""
+    if not isinstance(n, int):
+        return None
+    if 73 <= n <= 88:
+        return "Round of 32"
+    if 89 <= n <= 96:
+        return "Round of 16"
+    if 97 <= n <= 100:
+        return "Quarter-finals"
+    if 101 <= n <= 102:
+        return "Semi-finals"
+    if n == 103:
+        return "Third place"
+    if n == 104:
+        return "Final"
+    return None
+
+
+def next_round(round_name):
+    """The round a winner of `round_name` advances to (None past the Final / for a side match
+    like 'Third place')."""
+    try:
+        i = KO_SEQUENCE.index(round_name)
+    except ValueError:
+        return None
+    return KO_SEQUENCE[i + 1] if i + 1 < len(KO_SEQUENCE) else None
+
+
+_PLACEHOLDER_RE = re.compile(r"^\s*(winner|loser|runner[-\s]?up)\b", re.I)
+
+
+def is_placeholder_team(name):
+    """True for bracket placeholders like 'Winner Match 83' / 'Runner-up Group A' / 'Loser Match 101'
+    (and empty) — teams not yet determined, which must never be listed as real teams."""
+    if not name or not name.strip():
+        return True
+    n = name.strip()
+    if _PLACEHOLDER_RE.match(n):
+        return True
+    if re.search(r"\bmatch\s+\d+", n, re.I):
+        return True
+    return False
+
+
+def _real_names(match):
+    out = []
+    for side in ("home", "away"):
+        nm = (match.get(side) or {}).get("name")
+        if nm and not is_placeholder_team(nm):
+            out.append(nm)
+    return out
+
+
+def match_winner_name(match, advancing):
+    """The winning team's name, or None if unplayed / undetermined. Decisive score -> higher score.
+    A draw means it went to penalties (a.e.t.) — the winner is then whichever side is known to have
+    ADVANCED (appears in a later bracket match); `advancing` is that set of team names."""
+    if not match.get("played"):
+        return None
+    hs, as_ = match.get("home_score"), match.get("away_score")
+    if hs is None or as_ is None:
+        return None
+    h = (match.get("home") or {}).get("name")
+    a = (match.get("away") or {}).get("name")
+    if hs > as_:
+        return h
+    if as_ > hs:
+        return a
+    adv = advancing or set()
+    if h in adv and a not in adv:
+        return h
+    if a in adv and h not in adv:
+        return a
+    return None   # tie with no advancement info yet -> unknown (rendered without a winner)
+
+
+def _round_idx(round_name):
+    """Order key for advancement: R32<R16<QF<SF<Final. Off-sequence (Third place / None) = -1."""
+    try:
+        return KO_SEQUENCE.index(round_name)
+    except ValueError:
+        return -1
+
+
+def derive_knockout_state(matches):
+    """From a list of knockout match dicts (each carrying `round`, teams, scores, played; `number`
+    optional), derive the tournament state for the redesigned message:
+      current_round / next_round,
+      results   = played matches, each with a resolved `winner` (penalty-aware),
+      eliminated = losers, NEWEST FIRST (cumulative — the group stage is over),
+      through    = real teams already into the NEXT round,
+      yet_to_play = real teams still to play the CURRENT round.
+    Keys off ROUND (robust: played boxes don't expose a match number), not the number.
+    Pure: no HTML, no time windows (windowing of results/fixtures happens upstream)."""
+    ko = [m for m in matches if m.get("round")]
+
+    results, elim_order = [], []
+    for m in ko:
+        if not m.get("played") or m.get("home_score") is None:
+            continue
+        mi = _round_idx(m["round"])
+        later_teams = set()
+        for m2 in ko:
+            if _round_idx(m2["round"]) > mi:          # a later round == advanced past this match
+                later_teams.update(_real_names(m2))
+        w = match_winner_name(m, later_teams)
+        r = dict(m)
+        r["winner"] = w
+        results.append(r)
+        if w:
+            loser = next((nm for nm in _real_names(m) if nm != w), None)
+            if loser:
+                elim_order.append((m.get("date") or "", mi, m.get("number") or 0, loser))
+    elim_order.sort(key=lambda t: (t[0], t[1], t[2]), reverse=True)   # newest first
+    eliminated = [t[3] for t in elim_order]
+
+    seq_unplayed = sorted({_round_idx(m["round"]) for m in ko
+                           if not m.get("played") and _real_names(m) and _round_idx(m["round"]) >= 0})
+    if seq_unplayed:
+        current = KO_SEQUENCE[seq_unplayed[0]]
+    else:
+        played = [m["round"] for m in ko if m.get("played") and _round_idx(m["round"]) >= 0]
+        current = played[-1] if played else None
+    nxt = next_round(current) if current else None
+
+    def _collect(pred):
+        seen, out = set(), []
+        for m in ko:
+            if pred(m):
+                for nm in _real_names(m):
+                    if nm not in seen:
+                        seen.add(nm)
+                        out.append(nm)
+        return out
+
+    through = _collect(lambda m: m.get("round") == nxt) if nxt else []
+    yet_to_play = _collect(lambda m: m.get("round") == current and not m.get("played"))
+
+    return {"current_round": current, "next_round": nxt, "results": results,
+            "eliminated": eliminated, "through": through, "yet_to_play": yet_to_play}
+
+
+# --- Knockout HTML parsing (round + match number attach) -------------------
+_KO_HEAD_RE = re.compile(r'id="(Round_of_32|Round_of_16|Quarter-finals|Semi-finals|Third_place_play-off|Final)"')
+_KO_HATNOTE_RE = re.compile(r'2026 FIFA World Cup (round of 32|round of 16|quarter-finals|semi-finals)', re.I)
+
+
+def _norm_round(s):
+    s = (s or "").strip().lower().replace("_", " ").replace("-", "-")
+    return {
+        "round of 32": "Round of 32", "round_of_32": "Round of 32",
+        "round of 16": "Round of 16", "round_of_16": "Round of 16",
+        "quarter-finals": "Quarter-finals", "semi-finals": "Semi-finals",
+        "third place play-off": "Third place", "third_place_play-off": "Third place",
+        "final": "Final",
+    }.get(s, None)
+
+
+def _round_markers(html):
+    marks = []
+    for m in _KO_HEAD_RE.finditer(html):
+        r = _norm_round(m.group(1).replace("_", " "))
+        if r:
+            marks.append((m.start(), r))
+    for m in _KO_HATNOTE_RE.finditer(html):
+        r = _norm_round(m.group(1))
+        if r:
+            marks.append((m.start(), r))
+    marks.sort()
+    return marks
+
+
+def _nearest_round(marks, pos):
+    best = None
+    for mp, lab in marks:
+        if mp <= pos:
+            best = lab
+        else:
+            break
+    return best
+
+
+def _match_number(box):
+    m = re.search(r'id="[Mm]atch[ _]?(\d{1,3})"', box) or re.search(r'>\s*Match\s+(\d{1,3})\s*<', box)
+    return int(m.group(1)) if m else None
+
+
+def parse_knockout_matches(html):
+    """Every KNOCKOUT match box (group boxes excluded), enriched with `number` (when the box
+    exposes it) and `round` (from the number if present, else the nearest section heading)."""
+    html = html or ""
+    marks = _round_markers(html)
+    starts = [m.start() for m in re.finditer(r'class="footballbox"', html)]
+    out = []
+    for i, s in enumerate(starts):
+        e = starts[i + 1] if i + 1 < len(starts) else len(html)
+        box = html[s:e]
+        if "2026_FIFA_World_Cup_Group_" in box:
+            continue
+        parsed = _parse_box(box)
+        if not parsed:
+            continue
+        num = _match_number(box)
+        parsed["number"] = num
+        parsed["round"] = round_for_match_number(num) if num else _nearest_round(marks, s)
+        out.append(parsed)
+    return out
+
+
+def build_knockout_payload(html, now, result_window_hours=48, fixture_window_hours=48, live_window_hours=4):
+    """The knockout-stage counterpart of build_payload. Derives the full state (current/next round,
+    eliminated newest-first, through / yet-to-play) from ALL knockout matches, then windows the
+    DISPLAY lists by real kickoff time:
+      results  = finished matches in the last `result_window_hours`, each with a resolved `winner`
+      live     = current-round matches kicked off but unfinished ('result in the next update')
+      fixtures = REAL (both-determined) current-round matches in the next `fixture_window_hours`
+    Placeholder bracket slots ('Winner Match 83') never appear as fixtures."""
+    now_utc = now.astimezone(timezone.utc)
+    today = now.date()
+    matches = parse_knockout_matches(html)
+    state = derive_knockout_state(matches)
+    cur = state["current_round"]
+    winner_of = {(r["home"]["name"], r["away"]["name"], r.get("date")): r.get("winner")
+                 for r in state["results"]}
+
+    def _within_days(dstr, span_h, ahead=False):
+        try:
+            d = datetime.strptime(dstr, "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            return False
+        delta = (d - today).days if ahead else (today - d).days
+        return 0 <= delta <= max(1, round(span_h / 24))
+
+    results, live, fixtures = [], [], []
+    for m in matches:
+        rnd = m.get("round")
+        if not rnd:
+            continue
+        ku = _kickoff_utc(m.get("date"), m.get("time"))
+        if m.get("played") and m.get("home_score") is not None:
+            keep = (0 <= (now_utc - ku).total_seconds() <= result_window_hours * 3600) if ku is not None \
+                else _within_days(m.get("date"), result_window_hours)
+            if keep:
+                results.append({"home": m["home"], "away": m["away"],
+                                "home_score": m["home_score"], "away_score": m["away_score"],
+                                "goals": m["goals"], "round": rnd,
+                                "winner": winner_of.get((m["home"]["name"], m["away"]["name"], m.get("date")))})
+        elif not m.get("played"):
+            if rnd != cur:                                   # only the current round is 'next up'
+                continue
+            if is_placeholder_team(m["home"].get("name")) or is_placeholder_team(m["away"].get("name")):
+                continue
+            entry = {"home": m["home"], "away": m["away"], "kickoff": m.get("time", ""),
+                     "date": m["date"], "round": rnd}
+            if ku is not None:
+                ahead = (ku - now_utc).total_seconds()
+                if 0 <= ahead <= fixture_window_hours * 3600:
+                    fixtures.append(entry)
+                elif -live_window_hours * 3600 <= ahead < 0:
+                    live.append(entry)
+            elif _within_days(m.get("date"), fixture_window_hours, ahead=True):
+                fixtures.append(entry)
+
+    payload = dict(state)
+    payload["results"] = results     # windowed for display; derivation already used the full set
+    payload["live"] = live
+    payload["fixtures"] = fixtures
+    payload["standings"] = []        # knockout has no group tables (keeps the runner's shape)
+    return payload

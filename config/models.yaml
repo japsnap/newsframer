@@ -269,6 +269,14 @@ deduplicator_price_event_text_chars: 300
 
 # --- World Cup (NF-A3, temporary — data from Wikipedia, not an API) ---
 worldcup_end_date: "2026-07-19"        # after this the WC message self-skips (no empty sends)
+# Knockout-stage view (2026-07-02): once the group stage is over, the WC message switches from
+# group tables to a round-based layout — winners ("X beat Y", penalty-aware), cumulative knocked-out
+# list (newest first), and still-alive split into through-to-next-round vs yet-to-play. auto = detect
+# (knockout data present -> knockout view); group / knockout force a stage. The KO result/fixture
+# windows are wider than 24h because knockout matches are spaced 1-2 days apart.
+worldcup_stage: "auto"                 # auto | group | knockout
+worldcup_ko_result_window_hours: 48    # recent knockout results shown (no "last 24h" framing)
+worldcup_ko_fixture_window_hours: 48   # upcoming current-round fixtures shown as "Next up"
 worldcup_result_window_hours: 28       # NF-F5: 28 = the 24h daily-run gap + ~4h match-length slack, so a match
                                        #   still IN PROGRESS at one day's run is still caught as a FINISHED result
                                        #   at the next day's run (instead of vanishing in the live->results gap).
