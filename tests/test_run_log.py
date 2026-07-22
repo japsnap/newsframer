@@ -88,6 +88,24 @@ def test_build_exec_row_defaults():
     print("PASS: build_exec_row_defaults")
 
 
+def test_exec_only_fields_stripped_from_agent_runs():
+    """agent_runs has NO artifact_verified / linked_hypotheses columns — those are execution_log
+    fields that ride through the payload. Passing them into the agent_runs insert made it fail
+    SILENTLY on every writer run from 2026-06-18 to 2026-07-22 (the swallow hid a month of missing
+    writer rows). They must be stripped from the agent_runs row yet still reach execution_log."""
+    sb = FakeSB(fail=False)
+    os.environ.pop("NEWSFRAMER_TRACE_ID", None)
+    ok = run_log.record_run(sb, {"agent_name": "writer", "status": "success",
+                                 "artifact_verified": True, "linked_hypotheses": ["h1"]})
+    ar = _rows(sb, "agent_runs")
+    ex = _rows(sb, "execution_log")
+    assert ok is True
+    assert ar and "artifact_verified" not in ar[0] and "linked_hypotheses" not in ar[0]
+    assert ar[0]["agent_name"] == "writer" and ar[0]["status"] == "success"
+    assert ex and ex[0]["artifact_verified"] is True and ex[0]["linked_hypotheses"] == ["h1"]
+    print("PASS: exec_only_fields_stripped_from_agent_runs")
+
+
 def test_mirror_writes_execution_log_with_trace():
     sb = FakeSB(fail=False)
     inserted = run_log.mirror_execution_log(

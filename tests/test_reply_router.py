@@ -68,9 +68,9 @@ def test_unlimited_when_zero():
 
 def test_chat_settings_merge():
     cfg = {"defaults": {"rate_limit_per_day": 10, "default_language": "en"},
-           "chats": {"wa:Muda": {"rate_limit_per_day": 15}}}
-    ok("override_wins", rr.chat_settings("wa:Muda", cfg)["rate_limit_per_day"] == 15)
-    ok("inherits_default", rr.chat_settings("wa:Muda", cfg)["default_language"] == "en")
+           "chats": {"wa:Friend": {"rate_limit_per_day": 15}}}
+    ok("override_wins", rr.chat_settings("wa:Friend", cfg)["rate_limit_per_day"] == 15)
+    ok("inherits_default", rr.chat_settings("wa:Friend", cfg)["default_language"] == "en")
     ok("unlisted_uses_defaults", rr.chat_settings("wa:other", cfg)["rate_limit_per_day"] == 10)
 
 

@@ -11,6 +11,11 @@ disabled flag, or a failed insert can never affect agent_runs or the brief.
 """
 import os
 
+# execution_log-only fields that ride through the payload (build_exec_row maps them). agent_runs
+# has NO such columns — passing them through made the writer's agent_runs insert fail silently on
+# every run from 2026-06-18 to 2026-07-22 (the best-effort swallow hid it). Strip before insert.
+EXEC_ONLY_FIELDS = ("artifact_verified", "linked_hypotheses")
+
 
 def record_run(sb, payload):
     """Insert one agent_runs row, best-effort. Returns True on success, False if the agent_runs
@@ -18,7 +23,8 @@ def record_run(sb, payload):
     isolated) so every engine of one run shares a trace_id."""
     ok = True
     try:
-        sb.table("agent_runs").insert(payload).execute()
+        ar_payload = {k: v for k, v in payload.items() if k not in EXEC_ONLY_FIELDS}
+        sb.table("agent_runs").insert(ar_payload).execute()
     except Exception as e:
         print(f"  WARN: agent_runs insert failed (non-fatal bookkeeping): {e}")
         ok = False

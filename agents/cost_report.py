@@ -1,6 +1,6 @@
 """
 Daily cost report (NF-14) — sent to the operator's Telegram AFTER the 11:00 WhatsApp dispatch has
-reached the group + Muda. Rolls up the whole day's spend from the execution_log table (per-run
+reached the group + Friend DM. Rolls up the whole day's spend from the execution_log table (per-run
 trace + cost): the Telegram brief PLUS every WhatsApp chat. The WhatsApp chat list comes from the
 registry, so adding chats later just works — nothing here is hard-coded to "2 groups".
 

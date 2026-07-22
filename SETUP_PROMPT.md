@@ -19,7 +19,10 @@ GROUND YOURSELF IN THE REAL REPO FIRST (do not invent steps):
 - Read .env.example (the list of secrets I must provide).
 - Read config/models.yaml (every setting; nothing is hard-coded — this is the one tuning file).
 - Read config/whatsapp_deliveries.example.yaml (the WhatsApp recipient template).
-- List the *.sql files and user_context.example.* (the database setup + example data).
+- Read the sql/ folder: schema.sql (the full database schema — run first), seed_sources.sql +
+  seed_junk_patterns.sql (starter data), and seed_user_context.example.sql (example interests /
+  hypotheses to edit). (sql/archive/ is old already-applied migrations — ignore it.)
+- Read setup_check.py (the "doctor" that verifies the install before the first real run).
 - Read requirements.txt (the Python packages).
 Summarize back to me, in plain words, what I'll need before we start.
 
@@ -39,15 +42,17 @@ WALK ME THROUGH THESE STAGES (adapt the exact commands to what you see in the re
   B. Get the code running locally: create the Python virtual environment, install requirements.txt,
      confirm Python 3.13.
   C. Secrets: copy `.env.example` to `.env` and fill in every line (locally, never in this chat).
-  D. Database: using the repo's *.sql files, set up the Supabase tables, enable pgvector, and load
-     the example interests/hypotheses from user_context.example.* (edited to be about MY interests).
+  D. Database: in the Supabase SQL editor run sql/schema.sql (creates every table + enables
+     pgvector), then sql/seed_sources.sql and sql/seed_junk_patterns.sql; finally load
+     sql/seed_user_context.example.sql AFTER helping me edit it to be about MY interests.
   E. Sources: help me add my RSS sources to the `sources` table (topic bundle, region, weight).
   F. Settings: open config/models.yaml together and explain the few knobs worth setting for me
      (which models, how many themes, length, the daily cost cap). Defaults are fine to start.
   G. WhatsApp: copy whatsapp_deliveries.example.yaml to the real (gitignored) file and fill in my
      chats; explain pairing the second WhatsApp number to OpenClaw via the QR code.
-  H. First run BY HAND (before any scheduling): run the daily brief, preview the Telegram delivery
-     as a dry run, then a real send to me; then the WhatsApp dry run. Confirm I see a real brief.
+  H. First run BY HAND (before any scheduling): FIRST run `python setup_check.py` and help me fix
+     any FAIL it reports; then run the daily brief, preview the Telegram delivery as a dry run, then
+     a real send to me; then the WhatsApp dry run. Confirm I see a real brief.
   I. Schedule it: set up the OpenClaw timed jobs (morning Telegram, later WhatsApp, the health
      check) so it runs every day on its own while my PC is on.
   J. Verify it's live: show me how to print the latest brief and how the health-check watchdog

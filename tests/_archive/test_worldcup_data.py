@@ -1,3 +1,11 @@
+# ARCHIVED 2026-07-22 — retired, not deleted (repo archive rule).
+# Reason: the World Cup / football module was removed from the codebase (2026 tournament
+# ended 2026-07-19; operator chose clean deletion over extracting a tournament template).
+# Subject coverage now: none — the code under test no longer exists (agents/worldcup_data.py,
+# agents/worldcup_format.py, run_worldcup_brief.py, agents/event_feed.py, run_football_brief.py
+# and all worldcup_*/football_* config keys were deleted the same day).
+# This file will no longer run: its imports were deleted with the feature.
+
 """
 Tests for agents/worldcup_data.py — parse the Wikipedia '2026 FIFA World Cup' page
 into results (with goalscorers+minute), fixtures, and group standings. The synthetic

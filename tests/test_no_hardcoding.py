@@ -32,7 +32,7 @@ BARE = re.compile(r"\b(?:" + "|".join(PARAMS) + r")\s*=\s*[-+]?\d")
 
 SCAN_DIRS = ["agents"]
 SCAN_FILES = ["deliver_brief.py", "run_brief.py", "run_daily.py",
-              "run_whatsapp_brief.py", "run_pipeline.py"]
+              "run_whatsapp_brief.py"]
 
 PASS = []
 

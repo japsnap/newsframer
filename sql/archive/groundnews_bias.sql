@@ -1,3 +1,8 @@
+-- ARCHIVED 2026-07-22 — one-off migration, already applied to the live DB (2026-06-16).
+-- Superseded by sql/schema.sql (the groundnews_publication_bias / groundnews_factuality columns are
+-- defined there) and sql/seed_sources.sql (which ships these bias/factuality tags per source).
+-- Kept for provenance only; do NOT re-run on a schema.sql install.
+--
 -- NF-D1 — Ground News publication bias + factuality on `sources`.
 -- Seeds the NF-NEW10 left/center/right balance axis (geopolitics + pakistan clusters only).
 -- 3 CATEGORIES ONLY (operator 2026-06-16): left / center / right — the "Lean" gradations are

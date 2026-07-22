@@ -1,3 +1,7 @@
+-- ARCHIVED 2026-07-22 — one-off DATA migration, already applied to the live DB (2026-06-15).
+-- Not needed on a fresh install: sql/seed_sources.sql ships Middle East Eye with category='geopolitics'
+-- already. Kept for provenance only. Reversible: set category back to 'investigative' to undo.
+--
 -- recategorize_mee.sql  (NF-NEW3, 2026-06-15) — RUN AT HOME against the live Supabase.
 --
 -- WHY: Middle East Eye is tagged category='investigative', but it is a Middle East

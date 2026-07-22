@@ -1,3 +1,7 @@
+-- ARCHIVED 2026-07-22 — one-off DATA migration, already applied to the live DB (2026-06-15).
+-- Not needed on a fresh install: sql/seed_sources.sql already ships Reuters / Associated Press / CNN
+-- with the Google-News-RSS rss_url and active=true. Kept for provenance only.
+--
 -- fix_dead_wires.sql — 2026-06-15 (operator-approved)
 -- Reuters, Associated Press, and CNN have all dropped or frozen their official RSS:
 --   * feeds.reuters.com  -> DNS-dead (Reuters discontinued RSS in 2020)

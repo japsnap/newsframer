@@ -20,7 +20,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # embedding model is priced separately; the *_subscription_model keys run on the flat Max subscription
 # via `claude -p` (no per-token price by design — their agent_runs cost is logged as $0).
 EXCLUDE = {"fetcher_model", "deduplicator_embedding_model",
-           "writer_subscription_model", "analyst_subscription_model"}
+           "writer_subscription_model", "analyst_subscription_model",
+           "whatsapp_subscription_model"}
 PASS = []
 
 

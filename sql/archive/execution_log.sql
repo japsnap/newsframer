@@ -1,3 +1,7 @@
+-- ARCHIVED 2026-07-22 — one-off migration, already applied to the live DB (2026-06-18).
+-- Superseded by sql/schema.sql (the execution_log table is now defined there for fresh installs).
+-- Kept for provenance only; do NOT re-run on a schema.sql install.
+--
 -- NF-14 / spec §9 — execution_log: per-pipeline-run observability + cost trace.
 -- Applied to Supabase project aiabggajuzhkfnuaqqre via apply_migration (create_execution_log_nf14),
 -- 2026-06-18. Kept here for reproducibility (mirrors the tracked_threads.sql convention).

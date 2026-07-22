@@ -50,11 +50,11 @@ def test_summarize_empty():
 
 
 def test_format_has_sections():
-    m = cr.format_report(cr.summarize(ROWS), ["Happy Rana", "Muda DM"], "2026-06-18", 2.0)
+    m = cr.format_report(cr.summarize(ROWS), ["Family Group", "Friend DM"], "2026-06-18", 2.0)
     ok("has_total", "Total:" in m)
     ok("has_telegram", "Telegram brief" in m)
     ok("has_whatsapp", "WhatsApp" in m)
-    ok("has_chat_names", "Happy Rana" in m and "Muda DM" in m)
+    ok("has_chat_names", "Family Group" in m and "Friend DM" in m)
     ok("has_chat_count", "2 chats" in m)
     ok("has_cap_line", "% of the $2/day cap" in m)
 

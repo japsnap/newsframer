@@ -1,6 +1,6 @@
 """
 Tests for the WhatsApp-path cost logging (NF-14): _usage_tokens + _record_llm_cost.
-The WhatsApp brief generation + Urdu translation (group + Muda) were previously UNTRACKED;
+The WhatsApp brief generation + Urdu translation (group + Friend DM) were previously UNTRACKED;
 they now log to agent_runs + execution_log via record_run so the cost is no longer invisible.
 Pure (no network / no LLM).
 

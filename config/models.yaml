@@ -2,8 +2,9 @@
 
 fetcher_model: "gemini/gemini-2.5-flash-lite"
 analyst_model: "gemini/gemini-2.5-flash-lite"
-writer_model: "anthropic/claude-sonnet-4-6"
 classifier_model: "gemini/gemini-2.5-flash-lite"
+# writer_model lives in the "Writer settings" block below. (A stale duplicate key here used to
+# shadow-lose to that one silently — YAML keeps the LAST duplicate — removed 2026-07-22.)
 
 # 切り替え例:
 # writer_model: "anthropic/claude-opus-4-6"
@@ -118,7 +119,7 @@ whatsapp_emphasis_marker: "*"   # md_to_whatsapp: WhatsApp bold/heading marker (
 whatsapp_translate_system_prompt: "You are a professional translator. Translate the user's English news brief into natural, fluent {label}. Preserve the structure EXACTLY: same headings, bullets (•), bold (*...*) markers, and the final footer line. Keep proper nouns and organisation names in English (do not transliterate names). Output ONLY the translation — no preamble, no notes."   # {label} = target language name (filled in code)
 
 # --- Daily cost report (NF-14) — to the operator's Telegram, AFTER the 11:00 WhatsApp dispatch ---
-# Once the WhatsApp brief reaches the group + Muda, send the operator a cost rollup for the day: the
+# Once the WhatsApp brief reaches the group + Friend DM, send the operator a cost rollup for the day: the
 # Telegram brief + EVERY WhatsApp chat. The chat list is read from the registry, so adding chats
 # later just works — nothing is hard-coded to a fixed number of groups. Reads the execution_log.
 cost_report_enabled: true
@@ -133,18 +134,31 @@ writer_fallback_model: "gemini/gemini-2.5-flash-lite"   # Fix 3: degrade to Gemi
 # --- Writer on subscription (Phase 2 cost move) — run the writer's draft via headless Claude Code
 # (`claude -p`) on the flat Max subscription instead of the metered Anthropic API. ANY failure falls
 # back to the API path above (never silently drops); agent_runs.model_used shows which path ran.
-# Writer only (low volume); the high-volume analyst stays on the API. Default OFF = today's API path.
 writer_use_subscription: true         # true = try the subscription (claude -p) first, API fallback. false = API only (today).
 writer_subscription_model: "haiku"    # Claude Code model alias — haiku matches the API writer model (claude-haiku-4-5) and is fast on quota
 writer_subscription_timeout_seconds: 600
 writer_subscription_max_thinking_tokens: 0   # 0 DISABLES Claude Code's extended thinking — REQUIRED, else the headless call loops/hangs (>600s) on the big brief synthesis; with it ~70s
 # --- Analyst on subscription (NF-ANALYST-SUB) — same claude -p seam as the writer, for the analyst's
-# scoring calls. DEFAULT OFF (API only = today). Safe to enable only WITH batching on (analyst_batch_size
-# >1), or it spawns ~150 claude -p subprocesses/run instead of ~15. ANY failure falls back to the API.
-analyst_use_subscription: false       # true = try the subscription (claude -p) first per LLM call, API fallback. false = API (today).
+# scoring calls. Safe to enable only WITH batching on (analyst_batch_size >1), or it spawns ~150
+# claude -p subprocesses/run instead of ~15. ANY failure falls back to the API (Gemini) — never drops.
+analyst_use_subscription: true        # ON 2026-07-22 (subscription-first move). false = metered API only (the pre-07-22 path).
 analyst_subscription_model: "haiku"   # Claude Code model alias — matches the API analyst model family
 analyst_subscription_timeout_seconds: 600
 analyst_subscription_max_thinking_tokens: 0   # 0 DISABLES Claude Code extended thinking (REQUIRED — else the headless call hangs)
+# --- WhatsApp path on subscription (2026-07-22, subscription-first move) — the 11:00 brief
+# GENERATION and its TRANSLATION route through the same claude -p seam (run_whatsapp_brief.wa_complete).
+# ANY failure falls back to the metered chain exactly as before (primary model, then its fallback),
+# so a run never drops. false = the pre-07-22 metered path byte-for-byte.
+whatsapp_use_subscription: true
+whatsapp_subscription_model: "haiku"          # Claude Code model alias (haiku/sonnet — never opus)
+whatsapp_subscription_timeout_seconds: 600
+whatsapp_subscription_max_thinking_tokens: 0  # 0 DISABLES extended thinking (REQUIRED — else headless hangs)
+# --- Translation validity guard (2026-07-22 incident: the subscription model answered the translate
+# prompt AS AN ASSISTANT and that meta-text reached the group as "Urdu"). An invalid translation
+# retries once on the metered chain; still invalid -> the ENGLISH text is sent + the operator alerted.
+translate_min_length_ratio: 0.25       # translation must be >= this x the source length
+translate_min_script_ratio: 0.2        # share of letters that must be in the target script
+translate_script_langs: {ur: arabic}   # language -> expected script (unlisted languages: length check only)
 writer_primary_language: "en"
 writer_min_relevance: 6
 writer_relevance_floor: 4              # §4.5: backoff may lower the threshold down to here, within the 24h window
@@ -185,8 +199,8 @@ bundle_theme_floors:               # guaranteed minimum themes per active bundle
   vc: 1                            # NF-A1: VC split out of tech into its own bundle (own theme floor)
 bundle_theme_cap: 2                # max themes any single bundle may take (covers 2 big stories, never monopolizes)
 theme_count_multiplier: 1.5        # total Telegram themes = ceil(multiplier * #active bundles); 6 bundles -> 9
-theme_count_max: 14                # absolute safety ceiling on total themes (headroom as bundles grow: vc now,
-                                   #   football/etc. later — the multiplier above does the scaling; this only caps runaway)
+theme_count_max: 14                # absolute safety ceiling on total themes (headroom as bundles grow —
+                                   #   the multiplier above does the scaling; this only caps runaway)
 
 # --- Topic cadence classes (NF-NEW14, §8.1/§8.6) --------------------------------------------
 # Every source category belongs to a CADENCE CLASS that controls how its content is SELECTED for the
@@ -267,60 +281,6 @@ drop_report_long_max_chars: 2000
 deduplicator_embed_text_chars: 500
 deduplicator_price_event_text_chars: 300
 
-# --- World Cup (NF-A3, temporary — data from Wikipedia, not an API) ---
-worldcup_end_date: "2026-07-19"        # after this the WC message self-skips (no empty sends)
-# Knockout-stage view (2026-07-02): once the group stage is over, the WC message switches from
-# group tables to a round-based layout — winners ("X beat Y", penalty-aware), cumulative knocked-out
-# list (newest first), and still-alive split into through-to-next-round vs yet-to-play. auto = detect
-# (knockout data present -> knockout view); group / knockout force a stage. The KO result/fixture
-# windows are wider than 24h because knockout matches are spaced 1-2 days apart.
-worldcup_stage: "auto"                 # auto | group | knockout
-worldcup_ko_result_window_hours: 48    # recent knockout results shown (no "last 24h" framing)
-worldcup_ko_fixture_window_hours: 48   # upcoming current-round fixtures shown as "Next up"
-worldcup_result_window_hours: 28       # NF-F5: 28 = the 24h daily-run gap + ~4h match-length slack, so a match
-                                       #   still IN PROGRESS at one day's run is still caught as a FINISHED result
-                                       #   at the next day's run (instead of vanishing in the live->results gap).
-                                       #   Rolling window by real kickoff time, NOT a venue-date cut (WC venues are
-                                       #   in the US/behind UTC, so a venue date lags real time). Trade-off (accepted
-                                       #   — throwaway WC feature): a match finishing just before a run may show in
-                                       #   results two days running. Set back to 24 to revert.
-worldcup_fixture_window_hours: 24      # fixtures = matches kicking off within the next N hours (rolling)
-worldcup_live_window_hours: 4          # a match that kicked off in the last N hours with no final score
-                                       #   yet shows as "🔴 In progress" — else an in-play match falls in
-                                       #   the gap between results (finished) and fixtures (future) and vanishes
-worldcup_display_tz: "Asia/Karachi"    # label for the "Next 24 hours" kickoff times (Pakistan time)
-worldcup_display_utc_offset_hours: 5   # offset used to CONVERT kickoffs (this Windows host has no IANA
-                                       #   tzdata, so zoneinfo can't resolve the name; Pakistan has no
-                                       #   DST, so a fixed +5 is exact). Change both if the audience moves.
-worldcup_display_tz_label: "PKT / UTC+5"  # shown once in the fixtures header so readers know the zone
-worldcup_reply_line: "Any questions, reply"  # closing invite; "" disables it. Reply HANDLING is NOT built
-                                       #   yet — replies are only received (no auto-response). See run_worldcup_brief.
-# Which WhatsApp registry chats receive the WC brief: every delivery EXCEPT those with `worldcup: false`
-# in config/whatsapp_deliveries.yaml (gitignored). Targets/JIDs/numbers stay in that registry, never here.
-
-# --- Football news (NF-A2) — event-feed digest TEMPLATE (agents/event_feed + run_football_brief) ---
-# A self-contained RSS-headline digest sent as its OWN WhatsApp message at 11:00, isolated from the
-# main brief and the World Cup message (no LLM, no DB). WhatsApp-only (never Telegram). OFF by default
-# => the 11:00 dispatch is byte-for-byte unchanged until you set football_enabled: true. RE-USE this
-# structure for other events after the World Cup: copy this block (rename football_* -> <event>_*),
-# point the feeds at the new sources, add a maybe_send_<event>() call in run_whatsapp_brief — no
-# engine changes. The window/duration/topic are all knobs here, never hard-coded.
-football_enabled: false                 # OFF 2026-06-19 (NF item 4: football headlines removed from the 11:00 WhatsApp dispatch; World Cup message kept). true to re-enable.
-football_header: "⚽ *Football — Today's Headlines*"   # message title (WhatsApp *bold*)
-football_window_hours: 24               # only headlines published within this lookback are shown
-football_max_items: 10                  # total headlines in the message
-football_max_per_source: 3              # diversity cap per feed (so one outlet can't dominate)
-football_include_links: true            # show the clickable source URL under each headline
-football_fetch_timeout: 25              # per-feed HTTP timeout (seconds)
-football_reply_line: ""                 # optional closing invite (e.g. "Any questions, reply"); "" disables
-# Feeds (operator-tunable; verified live 2026-06-15). These mirror the DB `football` sources, which
-# stay active=false so they NEVER enter the Telegram brief — this digest is their only consumer.
-football_feeds:
-  - {name: "Guardian", url: "https://www.theguardian.com/football/rss"}
-  - {name: "BBC Sport", url: "https://feeds.bbci.co.uk/sport/football/rss.xml"}
-  - {name: "ESPN FC", url: "https://www.espn.com/espn/rss/soccer/news"}
-  - {name: "Sky Sports", url: "https://www.skysports.com/rss/11095"}
-
 # --- Blindspot of the day (NF-D2, spec §8.2) — Ground News Blindspot, scraped (no API/RSS) ---
 # ONE under-covered story/day with a one-line "which side is ignoring it" note. Channel-agnostic:
 # the SAME pick feeds the Telegram brief (spliced) and the WhatsApp 11:00 dispatch. OFF by default
@@ -383,7 +343,7 @@ writer_chars_per_paragraph: 800            # item 1: per-theme BODY is expressed
                                            #   = round(body_target / this). M=2 paras, L=4 (=2x), S=1; ~800 chars/para.
 surfaces:
   telegram:
-    theme_size: M            # S | M | L
+    theme_size: S            # S | M | L — M until 2026-07-22 (Shota: "each news needs more shortening"); revert = M
     categories: ["*"]        # item 4: per-surface content scope by source-category bundle. ["*"] = ALL bundles (current behaviour). Restrict e.g. ["crypto","geopolitics","pakistan",...]
     show_source: true        # show the source NAME
     include_link: true       # attach the article URL

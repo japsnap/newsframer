@@ -1,3 +1,7 @@
+-- ARCHIVED 2026-07-22 — one-off migration, already applied to the live DB (2026-06-17).
+-- Superseded by sql/schema.sql (the tracked_threads table is now defined there for fresh installs).
+-- Kept for provenance only; do NOT re-run on a schema.sql install.
+--
 -- NF-C1 (spec §4.4 / §9): persistent watchlist of ongoing stories tracked across days for
 -- news-context-shift sequencing. Applied to Supabase project aiabggajuzhkfnuaqqre on 2026-06-17
 -- via apply_migration (migration: create_tracked_threads_nf_c1). Kept here for reproducibility.

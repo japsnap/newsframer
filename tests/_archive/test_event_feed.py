@@ -1,3 +1,11 @@
+# ARCHIVED 2026-07-22 — retired, not deleted (repo archive rule).
+# Reason: the World Cup / football module was removed from the codebase (2026 tournament
+# ended 2026-07-19; operator chose clean deletion over extracting a tournament template).
+# Subject coverage now: none — the code under test no longer exists (agents/worldcup_data.py,
+# agents/worldcup_format.py, run_worldcup_brief.py, agents/event_feed.py, run_football_brief.py
+# and all worldcup_*/football_* config keys were deleted the same day).
+# This file will no longer run: its imports were deleted with the feature.
+
 """
 Tests for agents/event_feed.py (NF-A2) — the pure RSS-digest core (no network).
 Window filtering, dedup, per-source + total caps, newest-first, format, and the

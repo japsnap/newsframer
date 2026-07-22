@@ -32,6 +32,8 @@ from agents.run_log import record_run  # noqa: E402  (NF-14: track WhatsApp-path
 from agents.char_monitor import overrun_flag  # noqa: E402  (NF-F2: over-cap quality flag)
 from agents.window_audit import window_span_report  # noqa: E402  (NF-NEW2: provable 24h window)
 from agents import surface_render as srf  # noqa: E402  (2026-06-19: size/exclude/link/dedup)
+from agents import cc_writer  # noqa: E402  (subscription seam: `claude -p` on the flat plan)
+from agents.analyst import _SubResponse  # noqa: E402  (litellm-shaped wrapper for the sub path)
 from litellm import completion  # noqa: E402
 from datetime import datetime, timezone, timedelta  # noqa: E402
 
@@ -194,12 +196,51 @@ def _usage_tokens(resp):
     return (getattr(usage, "prompt_tokens", 0) or 0, getattr(usage, "completion_tokens", 0) or 0)
 
 
+def subscription_complete(config, msgs):
+    """Route one WhatsApp-path LLM call through `claude -p` on the flat Max subscription
+    (mirrors the Telegram writer's cc_writer seam). Returns (litellm-shaped response,
+    "subscription:<model>"). Raises on ANY failure — the caller falls back to the metered
+    API, so a run never drops."""
+    system = "\n\n".join(m["content"] for m in msgs if m.get("role") == "system")
+    user = "\n\n".join(m["content"] for m in msgs if m.get("role") == "user")
+    model = str(config.get("whatsapp_subscription_model", "haiku"))
+    text, _mu, t_in, t_out = cc_writer.complete_via_subscription(
+        system, user, model=model,
+        timeout=int(config.get("whatsapp_subscription_timeout_seconds", 600)),
+        max_thinking_tokens=int(config.get("whatsapp_subscription_max_thinking_tokens", 0)))
+    return _SubResponse(text, t_in, t_out), f"subscription:{model}"
+
+
+def wa_complete(config, msgs, primary_model, fallback_model, temperature, max_tokens):
+    """Subscription-first LLM call for the WhatsApp path: `claude -p` when
+    whatsapp_use_subscription (default off = today's metered path byte-for-byte), then the
+    metered primary on any subscription failure, then the metered fallback model — the
+    existing resilience chain is unchanged underneath. Returns (response, used_model)."""
+    if config.get("whatsapp_use_subscription", False):
+        try:
+            resp, used = subscription_complete(config, msgs)
+            print(f"  WA path: {used} (flat plan, $0 metered)")
+            return resp, used
+        except Exception as e:
+            print(f"  WA SUBSCRIPTION failed ({type(e).__name__}: {str(e)[:120]}); metered API path")
+    try:
+        return completion(model=primary_model, messages=msgs, temperature=temperature,
+                          max_tokens=max_tokens), primary_model
+    except Exception as e:
+        if fallback_model and fallback_model != primary_model:
+            print(f"  PRIMARY {primary_model} failed ({e}); falling back to {fallback_model}")
+            return completion(model=fallback_model, messages=msgs, temperature=temperature,
+                              max_tokens=max_tokens), fallback_model
+        raise
+
+
 def _record_llm_cost(sb, config, agent_name, model, resp, status="success"):
     """NF-14: log a WhatsApp-path LLM call's real cost to agent_runs + execution_log, so the
-    group/Muda generation + translation are no longer invisible. Best-effort via record_run;
-    main's trace_id ties them to the run. Returns the cost (USD)."""
+    group/Friend-DM generation + translation are no longer invisible. Best-effort via record_run;
+    main's trace_id ties them to the run. Returns the cost (USD). A `subscription:` label is
+    the flat plan — no metered spend, so cost is 0 by definition (tokens still recorded)."""
     t_in, t_out = _usage_tokens(resp)
-    cost = estimate_cost(config, model, t_in, t_out)
+    cost = 0.0 if str(model).startswith("subscription:") else estimate_cost(config, model, t_in, t_out)
     record_run(sb, {"agent_name": agent_name, "model_used": model, "tokens_in": t_in,
                     "tokens_out": t_out, "cost_usd": round(cost, 6), "status": status})
     return cost
@@ -352,17 +393,9 @@ def generate_brief(config, sb, categories, topic_keywords, length=None, exclude_
         chars_per_paragraph=int(config.get("writer_chars_per_paragraph", 1000)),
     )
     msgs = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-    used = model
     print(f"  generating with {model} ({len(clusters)} themes, {len(highlights)} highlights)...")
-    try:
-        resp = completion(model=model, messages=msgs, temperature=float(config.get("whatsapp_temperature", 0.3)), max_tokens=_wa_max_tokens)
-    except Exception as e:
-        if fallback_model and fallback_model != model:
-            print(f"  PRIMARY {model} failed ({e}); falling back to {fallback_model}")
-            used = fallback_model
-            resp = completion(model=used, messages=msgs, temperature=float(config.get("whatsapp_temperature", 0.3)), max_tokens=_wa_max_tokens)
-        else:
-            raise
+    resp, used = wa_complete(config, msgs, model, fallback_model,
+                             float(config.get("whatsapp_temperature", 0.3)), _wa_max_tokens)
     text = resp.choices[0].message.content.strip()
     if quiet:
         text = load_config().get("quiet_day_text", "_Quiet news day — fewer items than usual._") + "\n\n" + text
@@ -373,6 +406,34 @@ def generate_brief(config, sb, categories, topic_keywords, length=None, exclude_
         print(f"  {_overrun}")
     _record_llm_cost(sb, config, "whatsapp_writer", used, resp)  # NF-14: track the group/DM gen cost
     return text, used, selected_ids
+
+
+# Unicode letter ranges per target script, for the translation validity gate. Keyed by the
+# script names used in the `translate_script_langs` config map.
+_SCRIPT_RANGES = {
+    "arabic": ((0x0600, 0x06FF), (0x0750, 0x077F), (0xFB50, 0xFDFF), (0xFE70, 0xFEFF)),
+}
+
+
+def looks_translated(text, lang, source_len, config):
+    """Validity gate for a translation (2026-07-22 incident: the subscription model answered the
+    translate prompt AS AN ASSISTANT — 'I need to clarify my role...' — and that meta-text was
+    sent to the group as the Urdu message, logged success). Pure. Checks (a) length >=
+    translate_min_length_ratio x source, and (b) for languages with a known target script
+    (translate_script_langs, default ur -> arabic), that at least translate_min_script_ratio of
+    the LETTERS are in that script. A language with no script mapping gets (a) only."""
+    text = (text or "").strip()
+    if len(text) < float(config.get("translate_min_length_ratio", 0.25)) * max(int(source_len), 1):
+        return False
+    script = dict(config.get("translate_script_langs") or {"ur": "arabic"}).get(lang)
+    ranges = _SCRIPT_RANGES.get(script)
+    if not ranges:
+        return True
+    letters = [c for c in text if c.isalpha()]
+    if not letters:
+        return False
+    hits = sum(1 for c in letters if any(lo <= ord(c) <= hi for lo, hi in ranges))
+    return (hits / len(letters)) >= float(config.get("translate_min_script_ratio", 0.2))
 
 
 def translate(config, text, lang, translate_model, sb=None):
@@ -386,16 +447,33 @@ def translate(config, text, lang, translate_model, sb=None):
     )
     sys_p = config.get("whatsapp_translate_system_prompt", _default_sys).replace("{label}", label)
     msgs = [{"role": "system", "content": sys_p}, {"role": "user", "content": text}]
-    used = translate_model
-    try:
-        resp = completion(model=translate_model, messages=msgs, temperature=float(config.get("whatsapp_translate_temperature", 0.2)), max_tokens=int(config.get("whatsapp_translate_max_tokens", 6000)))
-    except Exception as e:
-        print(f"  translate {translate_model} failed ({e}); falling back to {fallback}")
-        used = fallback
-        resp = completion(model=used, messages=msgs, temperature=float(config.get("whatsapp_translate_temperature", 0.2)), max_tokens=int(config.get("whatsapp_translate_max_tokens", 6000)))
+    temp = float(config.get("whatsapp_translate_temperature", 0.2))
+    max_tok = int(config.get("whatsapp_translate_max_tokens", 6000))
+    resp, used = wa_complete(config, msgs, translate_model, fallback, temp, max_tok)
+    out = resp.choices[0].message.content.strip()
+    # 2026-07-22 guard: an invalid translation from the subscription retries ONCE on the metered
+    # chain; if that is also invalid, the ENGLISH source is sent (a readable message beats garbage
+    # in the group) and the operator is alerted. This function never raises — a bad translation
+    # must not crash the whole multi-chat dispatch.
+    if not looks_translated(out, lang, len(text), config):
+        print(f"  translate: INVALID {lang} output via {used} ({len(out)} chars) — not the target script/length")
+        if str(used).startswith("subscription:"):
+            metered_cfg = dict(config)
+            metered_cfg["whatsapp_use_subscription"] = False
+            resp, used = wa_complete(metered_cfg, msgs, translate_model, fallback, temp, max_tok)
+            out = resp.choices[0].message.content.strip()
+        if not looks_translated(out, lang, len(text), config):
+            try:
+                send_alert(f"⚠️ NewsFramer: {lang} translation came back INVALID twice "
+                           f"(last via {used}) — sending the ENGLISH text to that chat instead.")
+            except Exception:
+                pass
+            if sb is not None:
+                _record_llm_cost(sb, config, "whatsapp_translate", used, resp, status="invalid_translation")
+            return text, f"untranslated:{used}"
     if sb is not None:
         _record_llm_cost(sb, config, "whatsapp_translate", used, resp)  # NF-14: track translation cost
-    return resp.choices[0].message.content.strip(), used
+    return out, used
 
 
 def send_whatsapp(text, account, target):
@@ -413,70 +491,11 @@ def confirmed_message_id(rc, stdout):
     return m.group(1) if m else None
 
 
-def maybe_send_worldcup(reg):
-    """Append the World Cup message to the 11:00 dispatch (user-approved 2026-06-15).
-    Runs AFTER the main WhatsApp brief has already sent, and is fully wrapped: any WC
-    failure (fetch/parse/build/send) is caught + alerted and can NEVER affect the main
-    brief. Self-skips when empty or after the tournament ends. Sends to the same chats
-    the registry feeds (group + Muda's DM), minus any with `worldcup: false`."""
-    try:
-        import run_worldcup_brief as wc  # imports worldcup_data/format + deliver only (no litellm)
-        cfg = load_config()
-        end = cfg.get("worldcup_end_date", "2026-07-19")
-        now = datetime.now(JST)
-        if now.date().isoformat() > end:
-            print("  WC: tournament ended; skip.")
-            return
-        html = wc.wd.fetch()
-        pay, msg = wc.build(html, now, cfg)
-        why = wc.skip_reason(pay, now, end)
-        if why:
-            print(f"  WC: skip (no empty send) — {why}.")
-            return
-        confirmed, attempted = wc.deliver(msg, reg)
-        print(f"  WC: {confirmed}/{attempted} target(s) confirmed.")
-    except Exception as e:
-        print(f"  WC: skipped (isolated failure) — {type(e).__name__}: {e}")
-        try:
-            send_alert(f"⚠️ NewsFramer WC (11:00 dispatch): {type(e).__name__} — "
-                       f"WC message skipped; the main WhatsApp brief is unaffected.")
-        except Exception:
-            pass
-
-
-def maybe_send_football(reg):
-    """Append the Football news message to the 11:00 dispatch (NF-A2). Config-gated
-    (football_enabled, default false => no-op). Fully isolated: any failure is caught +
-    alerted and can NEVER affect the main brief or the World Cup message. Self-skips when
-    nothing is in the window (no empty send). Sends to the same chats the registry feeds
-    (group + Muda's DM), minus any with `football: false`."""
-    try:
-        cfg = load_config()
-        if not cfg.get("football_enabled", False):
-            print("  Football: disabled (football_enabled=false) — skip.")
-            return
-        import run_football_brief as fb  # event_feed + deliver only (no litellm)
-        msg = fb.build_from_config(cfg)
-        if not msg:
-            print("  Football: skip (nothing in window).")
-            return
-        confirmed, attempted = fb.deliver(msg, reg)
-        print(f"  Football: {confirmed}/{attempted} target(s) confirmed.")
-    except Exception as e:
-        print(f"  Football: skipped (isolated failure) — {type(e).__name__}: {e}")
-        try:
-            send_alert(f"⚠️ NewsFramer Football (11:00 dispatch): {type(e).__name__} — "
-                       f"football message skipped; the main WhatsApp brief is unaffected.")
-        except Exception:
-            pass
-
-
 def maybe_send_blindspot(reg):
     """Append the Blindspot-of-the-day message to the 11:00 dispatch (NF-D2). Gated by
     blindspot_enabled AND blindspot_whatsapp (default master-off => no-op). Fully isolated:
-    any failure is caught + alerted and can NEVER affect the main brief, World Cup, or football
-    message. Self-skips when nothing strong today. Sends to registry chats not opted out
-    (`blindspot: false`)."""
+    any failure is caught + alerted and can NEVER affect the main brief. Self-skips when
+    nothing strong today. Sends to registry chats not opted out (`blindspot: false`)."""
     try:
         cfg = load_config()
         if not (cfg.get("blindspot_enabled", False) and cfg.get("blindspot_whatsapp", True)):
@@ -509,7 +528,7 @@ def maybe_send_blindspot(reg):
 
 
 def maybe_send_cost_report(reg):
-    """After the WhatsApp dispatch reaches the group + Muda, send the OPERATOR (Telegram) a cost
+    """After the WhatsApp dispatch reaches the group + Friend DM, send the OPERATOR (Telegram) a cost
     rollup for the whole day — the Telegram brief + every WhatsApp chat. Gated by
     cost_report_enabled; fully isolated. The chat list is read from the registry (dynamic — never
     hard-coded to a fixed number of groups), so adding chats later is automatic."""
@@ -628,16 +647,12 @@ def main():
             print(f"  recorded {n} delivered article_id(s) for whatsapp:{name}")
         elif args.send and not chat_ok:
             print(f"  NOT recorded for {name} (a send failed; alerted).")
-    # World Cup message — a SEPARATE WhatsApp message appended to this same dispatch,
-    # isolated so it can never affect the main brief above (only on a real --send).
+    # Appended messages — SEPARATE WhatsApp messages on this same dispatch,
+    # isolated so they can never affect the main brief above (only on a real --send).
     if args.send:
-        print("\n=== World Cup message (appended, isolated) ===")
-        maybe_send_worldcup(reg)
-        print("\n=== Football news message (appended, isolated) ===")
-        maybe_send_football(reg)
         print("\n=== Blindspot of the day (appended, isolated) ===")
         maybe_send_blindspot(reg)
-        print("\n=== Cost report (after the dispatch reached the group + Muda) ===")
+        print("\n=== Cost report (after the dispatch reached the group + Friend DM) ===")
         maybe_send_cost_report(reg)
     if not args.send:
         print("\nDRY RUN — nothing sent. Re-run with --send (or --send-saved to post the saved files).")

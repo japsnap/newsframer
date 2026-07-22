@@ -28,7 +28,7 @@ Also:
 
 - **Conductor / runtime:** OpenClaw (`openclaw.ai`) on an always-on PC — schedules the daily runs (cron + a weekly Monday hard reset), runs the engines, and delivers the brief.
 - **Engines:** five standalone Python modules under `agents/` — `fetcher`, `classifier`, `deduplicator`, `analyst`, `writer`. No engine calls another in code; Supabase carries state between them, so each is re-runnable in isolation.
-- **Supporting modules:** `agents/deliver.py` (confirmed-send delivery + recording), `drop_reports.py` (Investigations), `bundle_floors.py` (per-bundle theme allocation), `title_dedup.py` (optional same-story collapse), `critic.py` (optional pre-send check), `char_monitor.py` (character-overrun flag), `brief_select.py` (pick the most-complete fresh brief), `worldcup_data.py` / `worldcup_format.py` (the seasonal World Cup module), `llm_json.py` (tolerant LLM-JSON parsing), `run_log.py` (best-effort run logging).
+- **Supporting modules:** `agents/deliver.py` (confirmed-send delivery + recording), `drop_reports.py` (Investigations), `bundle_floors.py` (per-bundle theme allocation), `title_dedup.py` (optional same-story collapse), `critic.py` (optional pre-send check), `char_monitor.py` (character-overrun flag), `brief_select.py` (pick the most-complete fresh brief), `llm_client.py` (shared LiteLLM wrapper), `llm_json.py` (tolerant LLM-JSON parsing), `run_log.py` (best-effort run logging) — plus cross-day story tracking (`thread_tracker.py`), per-surface rendering (`surface_render.py`), pool/skew audits (`window_audit.py`, `source_skew.py`), the topic taxonomy (`topic_classes.py`), a daily cost rollup (`cost_report.py`), an optional subscription writer (`cc_writer.py`), a single-run lock (`gen_lock.py`), a dead-link check (`link_monitor.py`), the appended blindspot note (`blindspot.py`), and the Phase-2 reply system (`reply_router.py`, `reply_persona.py`, `signup_flow.py`). The repo layout below lists them all.
 - **Data:** Supabase (Postgres + pgvector) — articles, classifications, embeddings, scores, briefings, deliveries, run logs, sources, hypotheses.
 - **Models:** Gemini 2.5 Flash-Lite for the cheap stages (classify / analyze / embed / title-dedup), Claude Haiku for synthesis. Every model choice lives in `config/models.yaml`; no model IDs in code.
 - **Delivery:** Telegram Bot API + WhatsApp (a second dedicated number), through the OpenClaw gateway, which returns a real message ID used to gate the delivery recording.
@@ -44,47 +44,96 @@ Each engine documents itself in its module docstring; `config/models.yaml` is th
 - WhatsApp on a dedicated second number (paired to OpenClaw via QR).
 - OpenClaw installed and running on the always-on PC.
 
+## Quickstart (from zero)
+
+Everything runs locally on your PC. Roughly ten steps:
+
+1. **Clone** this repo and open a PowerShell terminal in it.
+2. **Create the virtual environment** (Python 3.13+):
+   ```powershell
+   py -3.13 -m venv venv
+   .\venv\Scripts\Activate.ps1
+   ```
+3. **Install dependencies:** `pip install -r requirements.txt`
+4. **Create a Supabase project** (free tier is fine). In its SQL editor, run **`sql/schema.sql`** top to bottom — it enables pgvector and creates every table.
+5. **Load the seed data** in the SQL editor: **`sql/seed_sources.sql`** and **`sql/seed_junk_patterns.sql`**. For your own interests/hypotheses, edit **`sql/seed_user_context.example.sql`** to be about *your* topics, then run it (optional — the pipeline runs fine with none).
+6. **Fill in your secrets — the easy way:** `python setup_wizard.py` asks for each key and writes `.env` for you (it never overwrites an existing `.env`, and never echoes a value back). Manual alternative: copy `.env.example` to `.env` and set each value (Supabase URL + service key, Gemini key, Telegram bot token + your chat id; Anthropic and Firecrawl are optional). Never commit `.env`.
+7. **Check the wiring:** `python setup_check.py` — it verifies your `.env`, Supabase, the tables, the sources, one live RSS fetch, and your LLM key, printing PASS/FAIL for each. (`--offline` skips the network + LLM probes.)
+8. **Build your first brief to the console:** `python run_brief.py`, then `python print_latest_brief.py` to read it. No delivery yet — this just proves the pipeline end to end.
+9. **Telegram delivery:** create a bot with @BotFather, put its token + your chat id in `.env`, then `python deliver_brief.py --dry-run` (preview) and `python deliver_brief.py` (real send).
+10. **Turn on the commit secret-guard** (recommended before pushing anywhere): `git config core.hooksPath hooks`. It blocks any commit that stages a `.env`/key file or secret-looking content; bypass a genuine false positive with `git commit --no-verify`.
+
+WhatsApp delivery and daily scheduling are the **optional advanced** layer — see *Running* below and the OpenClaw notes.
+
+**Prefer to be walked through it?** `SETUP_PROMPT.md` is an AI-assisted path: paste its prompt into Claude or ChatGPT and it guides you step by step using these same repo files.
+
 ## Repo layout
 
 ```
 newsframer/
 ├── README.md / CHANGELOG.md           this file + the dated record of what ships
-├── run_brief.py                       daily pipeline (5 engines, no dispatcher) -> brief in Supabase
+├── SETUP_PROMPT.md                    AI-assisted setup path (paste into Claude / ChatGPT)
+├── LICENSE                            MIT
+├── .env.example                       environment-variable template (names only, no values)
+├── requirements.txt                   Python dependencies
+├── setup_wizard.py                    guided first-run setup — asks for your keys, writes .env
+├── setup_check.py                     "doctor" — verify .env, Supabase, tables, RSS, LLM key
+│                                      # --- entrypoints ---
+├── run_brief.py                       daily pipeline (5 engines) -> brief in Supabase
 ├── run_daily.py                       build + deliver the Telegram brief in ONE process (the morning job)
 ├── deliver_brief.py                   send the fresh brief to Telegram + record deliveries ON confirmed send
 ├── run_whatsapp_brief.py              per-chat WhatsApp briefs (topic-filtered, multi-language); 2nd-slot
 │                                      gap-fetch refresh; per-chat recording on confirmed send
-├── run_worldcup_brief.py              seasonal World Cup update (structured data) -> WhatsApp, self-skips
-├── run_pipeline.py                    legacy full pipeline (manual local runs only)
-├── run_critic.py                      run the (optional) pre-send critic over the latest brief — inspect only
-├── check_run_health.py               missed-run / partial-run watchdog (alerts via the Telegram bot)
+├── check_run_health.py                missed-run / partial-run watchdog (alerts via the Telegram bot)
 ├── record_deliveries.py               record a brief's article IDs as delivered (idempotent)
 ├── print_latest_brief.py              print the latest fresh brief to stdout
 ├── get_drop_report.py                 return the full write-up for a drop-report on "more: <slug>"
+├── run_critic.py                      run the (optional) pre-send critic over the latest brief — inspect only
 ├── eval_classifier.py                 standalone Classifier inspection script
-├── requirements.txt                   Python dependencies
-├── agents/
+├── eval_bias_coverage.py              standalone left/center/right bias-coverage inspection
+├── gateway_watchdog.py                independent OpenClaw-gateway liveness watchdog
+├── register_gateway_watchdog.ps1      installs the gateway watchdog as a Windows scheduled task
+├── agents/                            # the 5 engines + supporting modules
 │   ├── fetcher.py classifier.py deduplicator.py analyst.py writer.py   (the 5 engines)
 │   ├── deliver.py                     confirmed-send delivery seam (record only after a real messageId)
-│   ├── drop_reports.py                investigative drop-report logic (Investigations section)
+│   ├── llm_client.py                  shared LiteLLM call wrapper (model routing + fallback)
+│   ├── llm_json.py                    tolerant LLM-JSON parsing (object/array/string/null, fences, prose)
+│   ├── run_log.py                     best-effort agent_runs / execution_log logging
 │   ├── bundle_floors.py               per-bundle theme allocation (floors + caps)
+│   ├── drop_reports.py                investigative drop-report logic (Investigations section)
 │   ├── title_dedup.py                 OPTIONAL: collapse same-story wire copies before the analyst
 │   ├── critic.py                      OPTIONAL: deterministic pre-send brief check (never patches)
 │   ├── char_monitor.py                flags a brief that exceeds its theme-scaled character cap
 │   ├── brief_select.py                pick today's most-complete fresh brief for delivery
-│   ├── worldcup_data.py worldcup_format.py   seasonal World Cup module (parse + format)
-│   ├── llm_json.py                    tolerant LLM-JSON parsing (object/array/string/null, fences, prose)
-│   ├── run_log.py                     best-effort agent_runs logging
-│   └── dispatcher.py                  DEPRECATED — superseded by OpenClaw delivery; kept only for reference
+│   ├── thread_tracker.py              cross-day story tracking (the tracked_threads watchlist)
+│   ├── window_audit.py                audits the freshness-window article pool
+│   ├── source_skew.py                 warns when the day's pool skews to a few sources / biases
+│   ├── topic_classes.py               topic taxonomy used for WhatsApp topic-based selection
+│   ├── surface_render.py              per-surface (Telegram / WhatsApp) rendering
+│   ├── cost_report.py                 daily spend rollup to the operator's Telegram
+│   ├── cc_writer.py                   OPTIONAL: run the writer on a flat Claude subscription (claude -p)
+│   ├── gen_lock.py                    single-run lock so two builds can't overlap
+│   ├── link_monitor.py                flags dead / redirect links in a finished brief
+│   ├── blindspot.py                   "blindspot of the day" appended WhatsApp note
+│   ├── reply_router.py                Phase-2 reply system: decide answer / deny / route-to-owner
+│   ├── reply_persona.py               Phase-2 reply voice / persona
+│   └── signup_flow.py                 Phase-2 subscriber signup flow
 ├── config/
 │   ├── models.yaml                    every tunable (single config surface)
+│   ├── chat_interaction.example.yaml  per-chat reply settings template (the real one is gitignored)
 │   └── whatsapp_deliveries.example.yaml   per-chat registry template (the real one is gitignored)
 ├── prompts/
 │   ├── analyst/system_prompt.txt
 │   └── writer/{system_prompt,tone,format_rules}.txt
+├── sql/
+│   ├── schema.sql                     complete from-zero schema (run this FIRST in Supabase)
+│   ├── seed_sources.sql               default RSS / scrape sources
+│   ├── seed_junk_patterns.sql         default URL / title junk filters
+│   ├── seed_user_context.example.sql  example interests + hypothesis (edit to your own)
+│   └── archive/                       one-off migrations already applied to the live DB (provenance only)
+├── user_context.example.sql / .json   legacy example interest/hypothesis templates
 ├── tests/                             unit tests (pure logic — no live DB or LLM)
-├── *.sql / user_context.example.*     example schema / one-off data migrations
-├── .env.example                       environment-variable template
+├── hooks/pre-commit                   secret-guard git hook (enable: git config core.hooksPath hooks)
 └── venv/                              local virtualenv (gitignored)
 ```
 
@@ -117,6 +166,9 @@ In production OpenClaw schedules everything. To run by hand from PowerShell (tes
 ```powershell
 .\venv\Scripts\Activate.ps1
 
+# Verify the install is wired up (env, Supabase, tables, one RSS fetch, LLM key):
+python setup_check.py              # --offline skips the network + LLM probes
+
 # Morning job — build today's brief into Supabase and deliver it to Telegram in one process:
 python run_daily.py                # --dry-run to preview deliver chunks without rebuilding
 
@@ -127,9 +179,6 @@ python deliver_brief.py            # --dry-run to preview chunks
 # Later slot — per-chat WhatsApp briefs (gap-refreshes the pool first when sending):
 python run_whatsapp_brief.py       # dry run (generate + save, no send)
 python run_whatsapp_brief.py --send
-
-# Seasonal World Cup update (self-skips when there's nothing to report):
-python run_worldcup_brief.py       # dry run (fetch + build + print)
 
 # Health watchdog (run after a slot's grace window):
 python check_run_health.py --slot telegram --dry-run

@@ -28,7 +28,7 @@ defaults:                         # applied to any chat not explicitly overridde
     ["han", "nahi", "chahiye", "kya", "aur", "batao", "kaise", "theek", "acha", "kar do", "information do"]
 
 chats:                            # per-chat overrides (chat id -> partial settings; anything omitted falls back to defaults)
-  "whatsapp:Happy Rana":
+  "whatsapp:Family Group":
     rate_limit_per_day: 20
-  "whatsapp:Muda":
+  "whatsapp:Friend DM":
     rate_limit_per_day: 20

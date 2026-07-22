@@ -32,6 +32,4 @@ deliveries:
     languages: ["en"]
     length: short                        # this chat gets a tighter brief (fewer themes, shorter)
     # also supported per chat (optional opt-outs for the appended messages):
-    #   worldcup: false      # skip the World Cup message for this chat
-    #   football: false      # skip the football headlines for this chat
     #   blindspot: false     # skip the Blindspot-of-the-day line for this chat
