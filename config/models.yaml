@@ -196,7 +196,11 @@ bundle_theme_floors:               # guaranteed minimum themes per active bundle
   pakistan: 1
   cybersecurity: 1
   tech: 1
-  vc: 1                            # NF-A1: VC split out of tech into its own bundle (own theme floor)
+  vc: 2                            # NF-A1: VC split out of tech into its own bundle. Floor 1 -> 2 by
+                                   #   owner order 2026-08-11 (VC interview prep): fundraise/IPO/startup
+                                   #   news outranks geopolitics for now; the bundle finally has daily
+                                   #   deal-flow feeds (TechCrunch Venture, Crunchbase News, The Bridge)
+                                   #   so two guaranteed themes have real articles to draw from.
 bundle_theme_cap: 2                # max themes any single bundle may take (covers 2 big stories, never monopolizes)
 theme_count_multiplier: 1.5        # total Telegram themes = ceil(multiplier * #active bundles); 6 bundles -> 9
 theme_count_max: 14                # absolute safety ceiling on total themes (headroom as bundles grow —
