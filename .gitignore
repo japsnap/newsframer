@@ -56,3 +56,11 @@ CODEX_AUDIT.md
 codex_findings_rc.md
 Dockerfile
 .claude/
+
+# Loop decision files (why / standing rules / how-to): local only, never committed. Owner rule 2026-09-11, every repo.
+DECISIONS.md
+CRITERIA.md
+PLAYBOOKS.md
+DECISIONS-archive-*.md
+CRITERIA-archive-*.md
+PLAYBOOKS-archive-*.md
