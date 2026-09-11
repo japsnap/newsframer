@@ -2,6 +2,13 @@
 
 The dated, git-tracked record of what ships. Newest first. Written at `/logout`.
 
+## 2026-09-11 — Brief accuracy guards: currency, truncation, claim tense
+_Shota's order "fix newsframer", from three defects the 150 Wiki compile caught in the briefs of 2026-09-04, 09-05 and 09-08. Suite green: 47 files. Commit 884c845._
+
+- **Yen read as dollars (09-08 Japan theme printed ¥630 million as "$63 million", about 15x too big; its "$1.2 billion" total also disagreed with its own parts, 948 million).** Writer prompt now keeps non-dollar amounts in their original currency, forbids invented conversion rates, and requires a stated theme total to equal its components. New deterministic flags in `agents/critic.py` and the writer run log: a `$` amount next to a yen-linked source, and a theme total off from its parts by more than 5% (`critic_currency_total_tolerance_pct`).
+- **Theme cut off mid-link (09-04 Serbia theme ended inside a URL).** The model's output stopped mid-item before the code spliced in Investigations. `strip_incomplete_tail` in `agents/char_monitor.py` removes an unfinished trailing line (at most 5) from the raw model output and logs `⚠ TRUNCATED OUTPUT`; Japanese and Urdu sentence endings count as finished. Replayed on the real 09-04 shape: only the cut link line goes; normal briefs lose nothing.
+- **Hedged claims upgraded to done deals (09-05 highlight: "could seek" a valuation became "completed a $2 trillion IPO").** Prompt rule keeps the source's tense and certainty; new `agents/tense_monitor.py` flags a highlight that turns planned or reported language into a completed fact.
+
 ## 2026-07-22 — WC deletion · subscription-first everywhere · translation guard · open-source rework · setup wizard
 _Two-day session (07-21→22). Suite grew 48→46 files (5 World Cup test files archived, 3 new test files added); green after every step. All Shota-approved._
 
