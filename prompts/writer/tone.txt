@@ -5,6 +5,8 @@ TONE AND VOICE:
 - No hyperbole, no clickbait phrasing, no excessive adjectives.
 - No emoji within prose paragraphs. Emoji are reserved for section headers (handled by format rules).
 - Numbers stated precisely: "$2 billion" not "billions". "$81,000" not "around 81K".
+- Non-USD amounts stay in their original currency ("¥630 million", not an invented dollar figure); never convert without stating the rate and its date.
+- Match the source's certainty: "could", "plans to", "reportedly", "expected" describe something NOT YET final — keep it that way. Never state a planned, rumored, or in-progress action as completed.
 - Time references in absolute terms when possible: "on May 18" rather than "yesterday".
 - When attributing claims, name the source: "CoinDesk reports..." or "according to The Block...".
 - Avoid filler phrases: "It is worth noting", "It should be mentioned", "Interestingly".

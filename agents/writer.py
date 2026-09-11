@@ -32,12 +32,14 @@ from drop_reports import (  # noqa: E402
 )
 from bundle_floors import select_themes_with_floors, cluster_bundle  # noqa: E402
 import topic_classes as tc  # noqa: E402  (NF-NEW14 topic cadence classes)
-from char_monitor import overrun_flag  # noqa: E402  (NF-F2: over-cap quality flag)
+from char_monitor import overrun_flag, strip_incomplete_tail, truncation_flag  # noqa: E402  (NF-F2 over-cap flag; 2026-09-04 mid-item truncation guard)
 from link_monitor import bare_url_flag  # noqa: E402  (NF-NEW1: bare-URL quality flag)
 from window_audit import window_span_report  # noqa: E402  (NF-NEW2: provable 24h window)
 import thread_tracker as seq  # noqa: E402  (NF-C1 §4.4 sequencing; only invoked when enabled)
 from source_skew import skew_warning, coverage_note  # noqa: E402  (NF-D3 skew flag + NF-NEW10c one-sided note)
 import surface_render as srf  # noqa: E402  (2026-06-19: per-surface size + highlight dedup)
+from tense_monitor import tense_mismatch_flag  # noqa: E402  (2026-09-05: highlight tense/certainty guard)
+from critic import find_currency_mismatches, find_theme_total_mismatches  # noqa: E402  (2026-09-08: yen->$ + theme-total guard)
 
 load_dotenv()
 
@@ -892,6 +894,17 @@ def run_writer():
         t_in = getattr(usage, "prompt_tokens", 0) if usage else 0
         t_out = getattr(usage, "completion_tokens", 0) if usage else 0
         cost = estimate_cost(config, used_model, t_in, t_out)
+
+    # 2026-09-04 Serbia-theme bug: a brief shipped cut off mid-URL because the model
+    # stopped on an output-token/length cap. Neither the subscription path (`claude -p`,
+    # the writer's DEFAULT) nor litellm reliably exposes a trustworthy finish_reason here,
+    # so this is a text-shape safety net applied to BOTH paths: never store a brief that
+    # ends on a line that looks unfinished. No-op (0 stripped) on a normal, complete brief.
+    briefing_text, _trunc_stripped = strip_incomplete_tail(briefing_text)
+    _truncflag = truncation_flag(_trunc_stripped)
+    if _truncflag:
+        print(f"  {_truncflag}")
+
     if quiet_day:
         briefing_text = QUIET_DAY_TEXT + "\n\n" + briefing_text
 
@@ -948,6 +961,21 @@ def run_writer():
     _bareurl = bare_url_flag(briefing_text)
     if _bareurl:
         print(_bareurl)
+    # 2026-09-08 Japan-theme bug: flag (don't fail) a '$' amount that shares a theme with a
+    # yen-linked citation (likely a mis-converted yen figure), and any theme whose stated
+    # total doesn't match the sum of its own listed components.
+    for _cm in find_currency_mismatches(briefing_text):
+        print(f"  ⚠ CURRENCY: theme \"{_cm['theme']}\" states a $ amount but cites a yen "
+              f"source ({', '.join(_cm['yen_urls'][:2])}) — check for a mis-converted yen figure.")
+    _total_tol = float(config.get("critic_currency_total_tolerance_pct", 0.05))
+    for _tm in find_theme_total_mismatches(briefing_text, tolerance_pct=_total_tol):
+        print(f"  ⚠ TOTAL MISMATCH: theme \"{_tm['theme']}\" states ~${_tm['stated_millions']:g}M "
+              f"total but components sum to ~${_tm['component_sum_millions']:g}M ({_tm['diff_pct']:g}% off).")
+    # 2026-09-05 bug: flag (don't fail) a highlight that upgrades a hedged/planned source
+    # claim into a completed fact.
+    _tenseflag = tense_mismatch_flag(highlights, briefing_text)
+    if _tenseflag:
+        print(f"  {_tenseflag}")
     print(f"Tokens: in={t_in} out={t_out} | Cost: ${cost:.4f} | Time: {duration_ms}ms")
 
     # Store. Record which article IDs went into the brief (clusters + highlights) so the

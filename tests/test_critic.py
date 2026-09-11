@@ -109,6 +109,99 @@ def test_theme_count_excludes_highlights_and_investigations():
     ok("theme_count_empty", c.theme_count("") == 0)
 
 
+#  --- currency: yen-linked source cited alongside a $ amount (2026-09-08 Japan-theme bug) ---
+
+YEN_THEME = """# NewsFramer Briefing — 2026-09-08
+
+## Japan Startups Raise Fresh Funding
+
+SoVa raised $63 million in its latest round, one of four Japan deals this week.
+
+**Articles:**
+[1] SoVa Raises New Round — [TechCrunch Japan](https://example.com/sova-raises-630-million-yen)
+[2] Aldagram Closes Round — [Nikkei](https://example.com/aldagram-raises-2b-yen)
+
+## Global Markets Steady
+US equities were little changed on the day.
+
+**Articles:**
+[1] Markets Recap — [Reuters](https://example.com/markets-recap)
+"""
+
+
+def test_currency_yen_dollar_mismatch_flagged():
+    f = c.critique(YEN_THEME, max_chars=5000)
+    ok("currency_flagged", "currency_yen_dollar_mismatch" in codes(f))
+    hit = next(x for x in f if x["code"] == "currency_yen_dollar_mismatch")
+    ok("currency_critical", hit["severity"] == c.CRITICAL)
+    ok("currency_names_theme", "Japan Startups Raise Fresh Funding" in hit["message"])
+
+
+def test_currency_no_false_positive_without_yen_link():
+    # Negative test: a $ amount with an ordinary (non-yen) citation must NOT be flagged.
+    f = c.critique(GOOD, max_chars=5000)
+    ok("no_currency_flag_on_clean_brief", "currency_yen_dollar_mismatch" not in codes(f))
+
+
+def test_currency_no_false_positive_yen_link_without_dollar_amount():
+    # A yen-linked source cited with no $ figure anywhere in the theme is not a mis-conversion.
+    txt = ("## Japan Tech News\n\nA company in Japan announced a product update.\n\n"
+           "**Articles:**\n[1] Update — [Source](https://example.com/company-update-yen)\n")
+    f = c.critique(txt, max_chars=5000)
+    ok("no_currency_flag_without_dollar", "currency_yen_dollar_mismatch" not in codes(f))
+
+
+def test_find_currency_mismatches_direct():
+    hits = c.find_currency_mismatches(YEN_THEME)
+    ok("direct_one_theme_hit", len(hits) == 1)
+    ok("direct_two_yen_urls", len(hits[0]["yen_urls"]) == 2)
+
+
+#  --- theme totals must equal the sum of their own listed components (2026-09-08) -----------
+
+MISMATCHED_TOTAL_THEME = """## Japan Startups Raise Combined Funding
+
+Four Japan startups raised a combined total of $1.2 billion this week: the first raised
+$300 million, the second raised $300 million, the third raised $200 million, and the
+fourth raised $148 million.
+
+**Articles:**
+[1] Deal One — [Source](https://example.com/a)
+[2] Deal Two — [Source](https://example.com/b)
+"""
+
+MATCHED_TOTAL_THEME = """## Japan Startups Raise Combined Funding
+
+Four Japan startups raised a combined total of $948 million this week: the first raised
+$300 million, the second raised $300 million, the third raised $200 million, and the
+fourth raised $148 million.
+
+**Articles:**
+[1] Deal One — [Source](https://example.com/a)
+[2] Deal Two — [Source](https://example.com/b)
+"""
+
+
+def test_theme_total_mismatch_flagged():
+    f = c.critique(MISMATCHED_TOTAL_THEME, max_chars=5000)
+    ok("total_mismatch_flagged", "theme_total_mismatch" in codes(f))
+    hit = next(x for x in f if x["code"] == "theme_total_mismatch")
+    ok("total_mismatch_important", hit["severity"] == c.IMPORTANT)
+
+
+def test_theme_total_matches_no_false_positive():
+    # Negative test: when the stated total actually equals the sum of components, no flag.
+    f = c.critique(MATCHED_TOTAL_THEME, max_chars=5000)
+    ok("total_match_clean", "theme_total_mismatch" not in codes(f))
+
+
+def test_find_theme_total_mismatches_direct():
+    hits = c.find_theme_total_mismatches(MISMATCHED_TOTAL_THEME)
+    ok("direct_total_hit", len(hits) == 1)
+    ok("direct_stated_1200", hits[0]["stated_millions"] == 1200)
+    ok("direct_components_948", abs(hits[0]["component_sum_millions"] - 948) < 0.01)
+
+
 def test_at_or_above_threshold():
     # the alert gate: only ping when a finding is at/above the configured severity
     crit = [{"severity": c.CRITICAL, "code": "x", "message": "m"}]

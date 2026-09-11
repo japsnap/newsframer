@@ -38,6 +38,88 @@ _NON_THEME = tuple(_CFG.get("critic_non_theme_sections", ("highlights", "investi
 _LINK = re.compile(r"\]\(https?://")        # a markdown [text](http...) citation
 _H2 = re.compile(r"^##\s+(.*)$", re.MULTILINE)
 
+# --- Currency / totals checks (2026-09-08 Japan-theme bug: yen figures rendered as $,
+# ~15x too big, plus a theme total that didn't match the sum of its own components). ---
+_DOLLAR_ANY = re.compile(r"\$\s?[\d,]+(?:\.\d+)?\s*(?:million|billion|thousand|[MBK])?", re.IGNORECASE)
+_AMOUNT_RE = r"\$\s?([\d,]+(?:\.\d+)?)\s*(billion|bn|million|mn|thousand|k|b|m)?\b"
+_AMOUNT = re.compile(_AMOUNT_RE, re.IGNORECASE)
+_TOTAL_AMOUNT = re.compile(
+    r"(?:total(?:ing|ed|s)?|combined|altogether|collectively)\D{0,30}?" + _AMOUNT_RE, re.IGNORECASE)
+_CITE_URL = re.compile(r"\((https?://[^)\s]+)\)")
+_YEN_URL = re.compile(r"(?:^|[\W_])(?:yen|円)(?:$|[\W_])", re.IGNORECASE)
+
+
+def _amount_to_millions(value_str, unit):
+    """Normalize a '$X <unit>' match to millions-of-dollars, or None when the figure has
+    no recognizable magnitude unit (so a stray '$5' can't be mistaken for a funding
+    component)."""
+    try:
+        v = float(str(value_str).replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+    unit = (unit or "").strip().lower()
+    if unit in ("billion", "bn", "b"):
+        return v * 1000
+    if unit in ("million", "mn", "m"):
+        return v
+    if unit in ("thousand", "k"):
+        return v / 1000
+    return None
+
+
+def find_currency_mismatches(text):
+    """A '$' amount stated inside a theme whose OWN citation list links to a
+    yen-denominated source ('yen' in the URL slug, or '円') is a red flag for a naive
+    yen->dollar mis-conversion — the Writer must carry non-USD amounts in their ORIGINAL
+    currency and never invent a conversion rate. Returns [{"theme", "yen_urls"}, ...].
+    Pure; never rewrites — a check that flags beats one that silently mangles numbers."""
+    out = []
+    for title, body in _sections(text or ""):
+        if not _is_theme(title):
+            continue
+        yen_urls = [u for u in _CITE_URL.findall(body) if _YEN_URL.search(u)]
+        if yen_urls and _DOLLAR_ANY.search(body):
+            out.append({"theme": title, "yen_urls": yen_urls})
+    return out
+
+
+def find_theme_total_mismatches(text, tolerance_pct=0.05):
+    """A theme that states a combined/total dollar figure must equal the sum of the
+    dollar amounts it actually lists as components — no invented rounding, and no folding
+    a lifetime cumulative total into what should be a one-period tally. Returns
+    [{"theme", "stated_millions", "component_sum_millions", "diff_pct"}, ...] for any
+    theme whose stated total is off from its own component sum by more than
+    tolerance_pct (default 5%). Pure; never rewrites."""
+    out = []
+    for title, body in _sections(text or ""):
+        if not _is_theme(title):
+            continue
+        m = _TOTAL_AMOUNT.search(body)
+        if not m:
+            continue
+        stated = _amount_to_millions(m.group(1), m.group(2))
+        if stated is None or stated <= 0:
+            continue
+        total_span = m.span()
+        components = [
+            _amount_to_millions(am.group(1), am.group(2))
+            for am in _AMOUNT.finditer(body)
+            if not (am.start() >= total_span[0] and am.end() <= total_span[1])
+        ]
+        components = [c for c in components if c is not None]
+        if not components:
+            continue
+        comp_sum = sum(components)
+        if comp_sum <= 0:
+            continue
+        diff_pct = abs(comp_sum - stated) / stated
+        if diff_pct > tolerance_pct:
+            out.append({
+                "theme": title, "stated_millions": stated,
+                "component_sum_millions": round(comp_sum, 3), "diff_pct": round(diff_pct * 100, 1),
+            })
+    return out
+
 
 def _sections(text):
     """[(title, body), ...] for each '## ' section, in document order."""
@@ -109,6 +191,21 @@ def critique(brief_text, max_chars=None, config=None):
     min_themes = int(cfg.get("critic_min_themes", cfg.get("writer_min_themes", 3)))
     if themes and len(themes) < min_themes:
         add(MINOR, "few_themes", f"Only {len(themes)} theme(s); expected at least {min_themes}.")
+
+    # 6. currency — a '$' amount in a theme that itself cites a yen-linked source (2026-09-08).
+    for cm in find_currency_mismatches(text):
+        add(CRITICAL, "currency_yen_dollar_mismatch",
+            f'Theme "{cm["theme"]}" states a $ amount but its own citations link to a '
+            f'yen source ({", ".join(cm["yen_urls"][:2])}) — likely a mis-converted yen '
+            f"figure; keep non-USD amounts in their original currency.")
+
+    # 7. theme totals must equal the sum of their own listed components (2026-09-08).
+    total_tol = float(cfg.get("critic_currency_total_tolerance_pct", 0.05))
+    for tm in find_theme_total_mismatches(text, tolerance_pct=total_tol):
+        add(IMPORTANT, "theme_total_mismatch",
+            f'Theme "{tm["theme"]}" states a total of ~${tm["stated_millions"]:g}M but its '
+            f'listed components sum to ~${tm["component_sum_millions"]:g}M '
+            f'({tm["diff_pct"]:g}% off).')
 
     return findings
 

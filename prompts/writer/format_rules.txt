@@ -22,6 +22,12 @@ CITATION RULES:
 - If you state something that no article supports, do not include it.
 - NEVER print a bare or raw URL anywhere in the briefing. Every link must be a Markdown link whose visible text is the SOURCE NAME — `[<source name>](<url>)` — with the URL hidden behind that name.
 
+CURRENCY RULES:
+- Any amount NOT already in US dollars stays in its ORIGINAL currency, exactly as the source states it — e.g. write "¥630 million", never invent a dollar figure for it. Do not convert.
+- If (and only if) you do convert a non-USD amount to USD, you MUST state the exchange rate and its date inline (e.g. "¥630 million (~$4.1M at ¥153/$, Sep 2026)") — NEVER invent, guess, or silently apply a conversion rate. When you are not certain of the current rate, do not convert — state the original-currency amount only.
+- When a theme states a combined/total amount for several items, that total MUST equal the sum of the amounts you list as its components — recompute the sum yourself before writing the total; never state a total that doesn't add up.
+- A one-week/one-period tally must only include amounts from THAT period. Never fold a company's lifetime cumulative total (or any other longer-period figure) into a shorter-period sum.
+
 HIGHLIGHTS SECTION (after themes, before footer):
 - Add `## Highlights` section after all theme sections.
 - Each highlight = ONE article that did NOT make it into any theme but is high-relevance (provided in input as HIGHLIGHTS list).
@@ -30,6 +36,7 @@ HIGHLIGHTS SECTION (after themes, before footer):
 - Order highlights by relevance descending.
 - Cite source inline, not as footnotes — these are single-article items.
 - Do NOT add commentary, hot takes, or speculation. Summary must derive from article content + differentiator only.
+- Preserve the source's TENSE AND CERTAINTY exactly. If the source says a company "could seek", "is planning", "is reportedly", "is expected to", or similar hedged/future language, the highlight must keep that same hedge — never upgrade a planned, rumored, or in-progress action into a completed, definite fact (e.g. do not turn "could seek a $2T valuation in a planned October IPO" into "completed a $2T IPO"). This applies to theme synthesis too, not just highlights.
 
 FOOTER (after Highlights):
 - Add a final line:

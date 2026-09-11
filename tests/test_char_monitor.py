@@ -73,6 +73,75 @@ def test_numeric_strings_coerced():
     ok("numeric_str_flags", cm.overrun_flag("9000", "8000", "1.0") is not None)
 
 
+# --- strip_incomplete_tail: mid-item truncation guard (2026-09-04 Serbia-theme bug) ----
+
+TRUNCATED_BRIEF = """## Serbia Faces New Spyware Campaign
+
+Researchers documented a widespread spyware campaign in Serbia.
+
+**Articles:**
+[1] Serbia Faces Largest Documented Spyware Wave — https://www.technadu.com/serbia-faces-largest-documented-spyware-wave-as"""
+
+COMPLETE_BRIEF = """## Serbia Faces New Spyware Campaign
+
+Researchers documented a widespread spyware campaign in Serbia.
+
+**Articles:**
+[1] Serbia Faces Largest Documented Spyware Wave — [Technadu](https://www.technadu.com/serbia-faces-largest-documented-spyware-wave-as-europe-report)
+
+---
+_Briefing generated from 42 articles. 20 made the relevance cutoff. 3 themes, 5 highlights._"""
+
+
+def test_truncated_bare_url_is_stripped():
+    clean, stripped = cm.strip_incomplete_tail(TRUNCATED_BRIEF)
+    ok("trunc_stripped_something", stripped > 0)
+    ok("trunc_dangling_url_gone", "technadu.com/serbia-faces-largest-documented-spyware-wave-as" not in clean)
+    ok("trunc_flag_fires", cm.truncation_flag(stripped) is not None)
+    ok("trunc_flag_has_marker", cm.TRUNCATION_MARKER in cm.truncation_flag(stripped))
+
+
+def test_complete_brief_is_untouched():
+    # Negative test: a well-formed, complete brief must NOT lose any content.
+    clean, stripped = cm.strip_incomplete_tail(COMPLETE_BRIEF)
+    ok("complete_nothing_stripped", stripped == 0)
+    ok("complete_text_unchanged", clean == COMPLETE_BRIEF)
+    ok("complete_no_flag", cm.truncation_flag(stripped) is None)
+
+
+def test_strip_never_eats_more_than_max_strip_lines():
+    junk = "\n".join(f"line {i} with no ending" for i in range(20))
+    clean, stripped = cm.strip_incomplete_tail(junk, max_strip=5)
+    ok("bounded_stripped", stripped == 5)
+    ok("bounded_kept_some", clean.count("\n") >= 10)
+
+
+def test_strip_drops_trailing_blank_lines_first():
+    text = COMPLETE_BRIEF + "\n\n\n"
+    clean, stripped = cm.strip_incomplete_tail(text)
+    ok("blank_trailing_no_falsepositive", stripped == 0)
+    ok("blank_trailing_trimmed", clean == COMPLETE_BRIEF)
+
+
+def test_japanese_and_urdu_endings_are_complete():
+    # A ja or ur brief ends on its own full stop; the guard must not trim it.
+    ja = "## 日本の動向\n日銀は政策金利を据え置いた。"
+    ur = "## پاکستان\nحکومت نے پٹرول کی قیمت بڑھا دی۔"
+    ok("ja_full_stop_untouched", cm.strip_incomplete_tail(ja) == (ja, 0))
+    ok("ur_full_stop_untouched", cm.strip_incomplete_tail(ur) == (ur, 0))
+    # Negative: a Japanese line cut mid-link is still trimmed.
+    cut = ja + "\n[1] [記事](https://example.jp/news/abc"
+    clean, n = cm.strip_incomplete_tail(cut)
+    ok("ja_cut_link_trimmed", n == 1 and clean == ja)
+
+
+def test_strip_tolerant_of_junk_input():
+    ok("strip_none", cm.strip_incomplete_tail(None) == (None, 0))
+    ok("strip_empty", cm.strip_incomplete_tail("") == ("", 0))
+    ok("truncation_flag_bad_input_none", cm.truncation_flag("not-a-number") is None)
+    ok("truncation_flag_zero_none", cm.truncation_flag(0) is None)
+
+
 def main():
     failed = 0
     for name, fn in sorted(globals().items()):
