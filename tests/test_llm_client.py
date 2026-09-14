@@ -128,7 +128,8 @@ def test_from_config_defaults():
     r = lc.resilient_from_config(cfg, "classifier_model", "classifier_fallback_model",
                                  "gemini/default", completion_fn=FakeLLM())
     ok("cfg_primary", r.primary == "gemini/x")
-    ok("cfg_fallback_default", r.fallback == "anthropic/claude-haiku-4-5")
+    # Default fallback is Gemini since 2026-09-14: NewsFramer must never reach the Anthropic API.
+    ok("cfg_fallback_default", r.fallback == "gemini/gemini-2.5-flash-lite")
     ok("cfg_timeout", r.timeout_s == 45.0)
     ok("cfg_threshold", r.breaker_threshold == 2)
 

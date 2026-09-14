@@ -598,7 +598,7 @@ def run_writer():
     sb = get_supabase()
     start = time.time()
 
-    model = config.get("writer_model", "anthropic/claude-haiku-4-5")
+    model = config.get("writer_model", "gemini/gemini-2.5-flash-lite")
     lang = config.get("writer_primary_language", "en")
     min_rel = int(config.get("writer_min_relevance", 6))
     rel_floor = int(config.get("writer_relevance_floor", 4))

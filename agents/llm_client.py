@@ -110,8 +110,12 @@ class ResilientLLM:
             raise
 
 
+# The default fallback is Gemini, not Anthropic (2026-09-14, owner's order: NewsFramer must not
+# spend on the Anthropic API at all, because that key is Koboshi's and its cost has to be readable).
+# This default is what fires when a fallback key is MISSING from the config, which is the quiet path
+# that config edits alone do not close.
 def resilient_from_config(config, primary_key, fallback_key, default_primary,
-                          default_fallback="anthropic/claude-haiku-4-5", label="llm",
+                          default_fallback="gemini/gemini-2.5-flash-lite", label="llm",
                           completion_fn=None):
     """Build a ResilientLLM from config. The fallback only fires on a primary FAILURE, so a healthy
     run is unchanged. Set the fallback key to '' / null to disable fallback (a primary failure then

@@ -21,11 +21,17 @@ classifier_model: "gemini/gemini-2.5-flash-lite"
 #     stages fall back to a second model when the primary fails, with a sticky per-run breaker. The
 #     fallback ONLY fires on a primary FAILURE, so a healthy run is byte-for-byte unchanged.
 #     agents/llm_client.py reads these. ---
+# ANTHROPIC API REMOVED 2026-09-14, owner's order: "Newsframer should not receive any api at
+# all, and should be working on a subscription." The subscription was already on for the
+# writer, the analyst and the WhatsApp brief, but EVERY one of them fell back to the metered
+# Anthropic API on any failure, silently. At roughly a dollar a day that fallback was firing
+# constantly. Gemini is the fallback everywhere now, so a failed subscription call still gets
+# answered and still costs nothing on the Anthropic key. That key is Koboshi's alone.
 llm_request_timeout_seconds: 60      # hard per-call wall-clock bound — a hung provider fails fast
 llm_breaker_threshold: 3             # consecutive primary failures before switching to the fallback for the rest of the run
-classifier_fallback_model: "anthropic/claude-haiku-4-5"   # used ONLY if the classifier primary (Gemini) fails
-analyst_fallback_model: "anthropic/claude-haiku-4-5"      # used ONLY if the analyst primary (Gemini) fails
-title_dedup_fallback_model: "anthropic/claude-haiku-4-5"  # used ONLY if the title-dedup primary fails
+classifier_fallback_model: "gemini/gemini-2.5-flash-lite"   # used ONLY if the classifier primary fails (was anthropic; see note above)
+analyst_fallback_model: "gemini/gemini-2.5-flash-lite"      # used ONLY if the analyst primary fails (was anthropic; see note above)
+title_dedup_fallback_model: "gemini/gemini-2.5-flash-lite"  # used ONLY if the title-dedup primary fails (was anthropic; see note above)
 deduplicator_embedding_breaker_threshold: 3   # consecutive embedding failures -> skip dedup gracefully
                                               #   (no Anthropic embeddings exist to fall back to; the brief
                                               #   still builds, clustering just degrades for that run)
@@ -129,7 +135,8 @@ cost_report_task_labels:        # task_type bucket -> friendly label in the dail
   whatsapp_brief: "💬 WhatsApp"
 
 # Writer settings
-writer_model: "anthropic/claude-haiku-4-5"
+writer_model: "gemini/gemini-2.5-flash-lite"   # the writer runs on the SUBSCRIPTION (below); this is only the
+                                               # fallback when claude -p fails, and it must not be metered Anthropic
 writer_fallback_model: "gemini/gemini-2.5-flash-lite"   # Fix 3: degrade to Gemini if Anthropic errors/rate-limits/billing-fails
 # --- Writer on subscription (Phase 2 cost move) — run the writer's draft via headless Claude Code
 # (`claude -p`) on the flat Max subscription instead of the metered Anthropic API. ANY failure falls

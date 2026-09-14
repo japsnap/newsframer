@@ -283,7 +283,7 @@ def generate_brief(config, sb, categories, topic_keywords, length=None, exclude_
     `length` (short/medium/long, NF-E2) selects the brief-shape knobs via resolve_length (default
     => medium => today's behaviour). `exclude_keywords` (item 5, 2026-06-19) is the per-category
     negative topic filter that drops crypto/markets leaks; None => include-only (today's behaviour)."""
-    model = config.get("writer_model", "anthropic/claude-haiku-4-5")
+    model = config.get("writer_model", "gemini/gemini-2.5-flash-lite")
     fallback_model = config.get("writer_fallback_model", "gemini/gemini-2.5-flash-lite")
     window_hours = int(config.get("writer_window_hours", 24))
     L = resolve_length(config, length)
@@ -438,7 +438,7 @@ def looks_translated(text, lang, source_len, config):
 
 def translate(config, text, lang, translate_model, sb=None):
     label = LANG_LABELS.get(lang, lang)
-    fallback = config.get("writer_model", "anthropic/claude-haiku-4-5")
+    fallback = config.get("writer_model", "gemini/gemini-2.5-flash-lite")
     _default_sys = (
         "You are a professional translator. Translate the user's English news brief into natural, "
         "fluent {label}. Preserve the structure EXACTLY: same headings, bullets (•), bold (*...*) "

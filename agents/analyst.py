@@ -550,9 +550,9 @@ def estimate_cost(config, model, tokens_in, tokens_out):
 def run_analyst():
     config = load_config()
     sb = get_supabase()
-    model = config.get("analyst_model", "anthropic/claude-haiku-4-5")
+    model = config.get("analyst_model", "gemini/gemini-2.5-flash-lite")
     llm = resilient_from_config(config, "analyst_model", "analyst_fallback_model",
-                                "anthropic/claude-haiku-4-5", label="analyst")
+                                "gemini/gemini-2.5-flash-lite", label="analyst")
     llm = maybe_wrap_subscription(llm, config)   # NF-ANALYST-SUB: claude -p path if enabled (default off)
     cap = int(config.get("analyst_max_articles_per_run", 300))
     window_hours = int(config.get("analyst_window_hours", 30))
