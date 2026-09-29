@@ -1,0 +1,50 @@
+[
+  {
+    "id": "00000000-0000-0000-0000-000000000001",
+    "kind": "interest",
+    "topic": "example-interest-topic-a",
+    "weight": 2,
+    "stance": null,
+    "confidence": null,
+    "reasoning": null,
+    "specificity": null,
+    "status": null,
+    "active": true
+  },
+  {
+    "id": "00000000-0000-0000-0000-000000000002",
+    "kind": "interest",
+    "topic": "example-interest-topic-b",
+    "weight": -1,
+    "stance": null,
+    "confidence": null,
+    "reasoning": null,
+    "specificity": null,
+    "status": null,
+    "active": true
+  },
+  {
+    "id": "00000000-0000-0000-0000-000000000003",
+    "kind": "hypothesis",
+    "topic": "Example hypothesis: <short testable claim about a domain you track>",
+    "stance": "your directional position on the claim (e.g. bullish / bearish / neutral)",
+    "confidence": 5,
+    "reasoning": "One or two sentences on why you hold this view and what evidence would change it.",
+    "specificity": "specific",
+    "weight": null,
+    "status": "active",
+    "active": true
+  },
+  {
+    "id": "00000000-0000-0000-0000-000000000004",
+    "kind": "hypothesis",
+    "topic": "Example hypothesis: <another testable claim>",
+    "stance": "neutral",
+    "confidence": 3,
+    "reasoning": "Placeholder reasoning — replace with your own.",
+    "specificity": "broad",
+    "weight": null,
+    "status": "pending_confirmation",
+    "active": true
+  }
+]

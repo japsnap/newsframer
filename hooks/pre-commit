@@ -1,0 +1,75 @@
+#!/bin/sh
+# NewsFramer pre-commit secret guard.
+# Blocks a commit that stages a secret file (.env, *.key, *.pem) or secret-looking content
+# (API keys, tokens, JWTs). The values-free .env.example template is always allowed.
+#
+# Install (once, per clone — works on Windows Git Bash, no copy step):
+#     git config core.hooksPath hooks
+#
+# Bypass a genuine false positive for one commit:
+#     git commit --no-verify
+#
+# Test / scan specific files directly, WITHOUT git (used by the test suite):
+#     sh hooks/pre-commit --scan path/to/file [more files...]
+#         exit 0 = clean, exit 1 = something blocked.
+
+# Secret-value shapes: Anthropic, Google, JWT (Supabase service_role etc.), Firecrawl,
+# Telegram bot token, and a KEY=<non-empty-value> assignment for the known secret vars
+# (an EMPTY assignment, as in .env.example, does NOT match).
+PATTERNS='sk-ant-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{30,}|eyJhbGciOi|fc-[A-Za-z0-9]{20,}|[0-9]{8,10}:[A-Za-z0-9_-]{35}|(SUPABASE_SERVICE_KEY|SUPABASE_KEY|ANTHROPIC_API_KEY|GEMINI_API_KEY|GOOGLE_API_KEY|FIRECRAWL_API_KEY|TELEGRAM_BOT_TOKEN)[[:space:]]*=[[:space:]]*[^[:space:]]'
+
+blocked=0
+
+# Return 0 (true) if the given basename is a secret file that must never be committed.
+# .env.example is explicitly allowed (it is a values-free template).
+name_is_secret_file() {
+  case "$1" in
+    .env.example) return 1 ;;
+    .env|.env.*|*.key|*.pem) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# --- Direct scan mode: scan whole files, no git needed (for testing) ---
+if [ "$1" = "--scan" ]; then
+  shift
+  for f in "$@"; do
+    if name_is_secret_file "$(basename "$f")"; then
+      echo "BLOCKED: secret file name: $f"; blocked=1; continue
+    fi
+    if grep -Eq "$PATTERNS" "$f"; then
+      echo "BLOCKED: possible secret in: $f"; blocked=1
+    fi
+  done
+  if [ "$blocked" -ne 0 ]; then
+    echo "secret guard: findings above."
+    exit 1
+  fi
+  echo "secret guard: clean."
+  exit 0
+fi
+
+# --- Normal pre-commit mode: scan the staged change set ---
+files=$(git diff --cached --name-only --diff-filter=ACM)
+
+for f in $files; do
+  if name_is_secret_file "$(basename "$f")"; then
+    echo "BLOCKED: staged secret file: $f"; blocked=1
+  fi
+done
+
+for f in $files; do
+  case "$(basename "$f")" in .env.example) continue ;; esac
+  case "$f" in hooks/pre-commit) continue ;; esac
+  if git diff --cached -U0 -- "$f" | grep -E '^\+' | grep -Eq "$PATTERNS"; then
+    echo "BLOCKED: possible secret in staged change to $f"; blocked=1
+  fi
+done
+
+if [ "$blocked" -ne 0 ]; then
+  echo ""
+  echo "Commit blocked by hooks/pre-commit (secret guard)."
+  echo "False positive? Bypass once with:  git commit --no-verify"
+  exit 1
+fi
+exit 0

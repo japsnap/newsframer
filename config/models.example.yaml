@@ -1,0 +1,546 @@
+# NewsFramer settings: every tunable lives here. Copy this file to config/models.yaml (setup_wizard.py
+# does it for you) and edit the copy; config/models.yaml is yours and never committed.
+
+# --- Where the AI runs ---------------------------------------------------------------------------
+# Every AI stage (classify, score, write, translate, summaries) runs on YOUR Claude subscription
+# through headless Claude Code (`claude -p`). No API key is needed for that. Install Claude Code
+# (npm install -g @anthropic-ai/claude-code) and log in once with `claude`; setup_check.py verifies it.
+# Turn one stage off with <stage>_use_subscription: false (stages: classifier, analyst, title_dedup,
+# writer, drop_report, sequencing, whatsapp).
+use_subscription: true
+subscription_model: "haiku"            # Claude Code model alias for every stage (haiku | sonnet)
+subscription_timeout_seconds: 600
+# If a subscription call fails (quota used up, not logged in, CLI missing), the stage falls back to its
+# *_model / *_fallback_model below, which needs that provider's API key in .env (optional). Either way
+# you are told: printed, logged to logs/subscription-fallback.log, and sent as an alert if you set one up.
+notify_on_subscription_fallback: true
+
+# --- Your timezone -------------------------------------------------------------------------------
+# Brief dates, the weekly scrape calendar, the Monday reset and slot_hours use this zone.
+operator_timezone: "UTC"               # IANA name, e.g. "Europe/London", "America/New_York", "Asia/Tokyo"
+
+# --- Output and (optional) delivery --------------------------------------------------------------
+# Every brief is saved as a Markdown file in brief_output_dir (paste it into a website, a newsletter,
+# a notes app). Sending it to a phone is optional: set delivery_channel to any channel OpenClaw
+# supports (telegram, whatsapp, discord, slack, signal, imessage, ...; ids at docs.openclaw.ai/channels)
+# and put the recipient in .env as DELIVERY_TARGET. Empty = file only, no phone needed.
+brief_output_dir: "output"
+delivery_channel: ""
+delivery_account: "default"            # the OpenClaw account id for that channel
+
+# API models (used only as the fallback when a subscription call fails; need a key in .env):
+fetcher_model: "gemini/gemini-2.5-flash-lite"
+analyst_model: "gemini/gemini-2.5-flash-lite"
+classifier_model: "gemini/gemini-2.5-flash-lite"
+
+# --- LLM resilience (2026-06-22 incident: Gemini became unreachable from the host; the Gemini-only
+#     stages — classifier, deduplicator embeddings, title-dedup, analyst, sequencing — had no request
+#     timeout and no fallback, so every call HUNG and the whole pipeline died: no Telegram brief +
+#     a hung WhatsApp run). Now every LLM call is HARD-bounded by a wall-clock timeout, and the chat
+#     stages fall back to a second model when the primary fails, with a sticky per-run breaker. The
+#     fallback ONLY fires on a primary FAILURE, so a healthy run is byte-for-byte unchanged.
+#     agents/llm_client.py reads these. ---
+# No metered Anthropic fallback (2026-09-14): the writer, the analyst and the WhatsApp brief
+# can run on a Claude subscription (claude -p). Previously a failed subscription call fell back to
+# the metered Anthropic API silently; now Gemini is the fallback everywhere, so a failed call still
+# gets answered without charging an Anthropic key.
+llm_request_timeout_seconds: 60      # hard per-call wall-clock bound — a hung provider fails fast
+llm_breaker_threshold: 3             # consecutive primary failures before switching to the fallback for the rest of the run
+classifier_fallback_model: "gemini/gemini-2.5-flash-lite"   # used ONLY if the classifier primary fails (was anthropic; see note above)
+analyst_fallback_model: "gemini/gemini-2.5-flash-lite"      # used ONLY if the analyst primary fails (was anthropic; see note above)
+title_dedup_fallback_model: "gemini/gemini-2.5-flash-lite"  # used ONLY if the title-dedup primary fails (was anthropic; see note above)
+deduplicator_embedding_breaker_threshold: 3   # consecutive embedding failures -> skip dedup gracefully
+                                              #   (no Anthropic embeddings exist to fall back to; the brief
+                                              #   still builds, clustering just degrades for that run)
+# Sequencing has NO fallback (optional post-pass): on the timeout it aborts after llm_breaker_threshold
+# consecutive failures and the brief is produced without the "What Changed" notes.
+
+# Fetcher
+fetch_hours_back: 24
+first_run_hours_back: 48
+fetcher_pr_keywords: ["sponsored", "partner", "press release", "advertorial", "paid post"]  # title keywords marking a PR/advertorial item (is_pr_article; only for sources whose notes say "Avoid PR articles")
+fetcher_scrape_timeout_seconds: 10  # HTTP timeout for the BeautifulSoup scrape path (fetch_web)
+fetcher_min_url_length: 30          # is_junk_url: URLs shorter than this are treated as non-article junk
+fetcher_min_title_length: 15        # is_junk_url: titles shorter than this are treated as junk
+max_articles_total: 250   # SUPERSEDED: order-based truncation removed (it starved later/newer sources). Kept for reference only; not read by the fetcher.
+fetch_safety_ceiling: 3000  # pure runaway guard: only if a run exceeds this do we cut, and then RANDOMLY
+                            #   across ALL articles (never by source order), so no source is starved.
+
+# item 5 (2026-06-22): THREE fetch tiers, config-driven, per-source caps. Each profile keeps the
+# NEWEST N items per source — the fetcher now sorts entries by published_at DESC BEFORE capping
+# (RSS feed order is not always newest-first). Flip `fetch_profile` to switch; no code edit.
+# (Supersedes the old max_articles_per_source / fetch_light_* keys.)
+fetch_profile: light            # heavy | medium | light  — LIVE = light (10/source); NF-FETCH-LIGHT 2026-06-30 (was normal=30). Revert: set heavy/medium/light back or pick medium.
+fetch_profiles:
+  heavy: 30
+  medium: 15
+  light: 10
+
+# --- Firecrawl scrape fallback (NF-B4, spec §3.3) --------------------------------------------
+# OFF by default. When on, the no-RSS scrape sources (TRT Global, Amnesty Evidence Lab, Delphi,
+# CST) fetch their LISTING page via Firecrawl's clean-markdown scrape instead of the basic
+# BeautifulSoup grab. LISTING PAGE ONLY — one Firecrawl call per source per run — to stay inside
+# the free tier (1,000 scrapes/mo; ~130-150/mo expected). Any failure (missing key, HTTP/timeout,
+# bad shape) silently FALLS BACK to the BeautifulSoup path, so a Firecrawl outage can never starve
+# these sources. The API key is read from .env (FIRECRAWL_API_KEY) and is NEVER stored here.
+firecrawl_enabled: false         # true = no-RSS sources fetch via Firecrawl (needs FIRECRAWL_API_KEY in .env)
+firecrawl_api_url: "https://api.firecrawl.dev/v2/scrape"
+firecrawl_timeout_seconds: 30        # Firecrawl renders JS, so it can take longer than a plain GET
+firecrawl_min_title_length: 20       # markdown link text shorter than this isn't an article title (matches the old >20 anchor-text filter)
+firecrawl_max_links: 60              # safety cap on links parsed from one listing page
+
+# Priority
+priority_source_types: ["research", "blog"]  # source_type values fetched first and guaranteed
+priority_guaranteed: true
+
+# --- Pricing per 1M tokens, USD ---
+# Update when swapping models or when provider prices change.
+# Used by every agent via estimate_cost(config, model, tokens_in, tokens_out).
+# Verified May 2026.
+pricing:
+  "gemini/gemini-2.5-flash-lite":
+    input: 0.10
+    output: 0.40
+  "anthropic/claude-haiku-4-5":
+    input: 1.00
+    output: 5.00
+  # Populate as each agent comes online:
+  # "anthropic/claude-sonnet-4-6": { input: ?, output: ? }
+  # "gemini/gemini-2.5-flash":     { input: 0.30, output: 2.50 }   # Claude fallback
+  # "gemini/gemini-2.5-pro":       { input: ?,    output: ? }      # Claude fallback
+
+analyst_max_articles_per_run: 3000   # 2026-06-15: raised 300 -> 3000 to match the fetch ceiling, so the
+                                     #   bigger 100/source fetch is actually scored (the analyst loads
+                                     #   unscored newest-first; at 300 it silently dropped everything past
+                                     #   the 300 newest -> absent from the brief). A ceiling, not a target:
+                                     #   real cost tracks ACTUAL volume (cheap Gemini Flash-Lite per article).
+analyst_window_hours: 30
+
+# NF-C2: second-slot freshness — the 11:00 WhatsApp brief used to reuse the 06:00 data
+# (nothing is fetched between slots), so it was never fresher than the morning. These make
+# the 11:00 run gap-fetch the new content first, then weight fresh items so they surface.
+whatsapp_gap_refresh: true     # at the 11:00 slot, refresh the pool (fetch->classify->dedup->analyst
+                               #   on the gap since 06:00) BEFORE building, so the WhatsApp brief sees
+                               #   06:00-11:00 news. false = old behaviour (no intraday fetch). --send only.
+whatsapp_gap_fetch_hours: 5    # NF-4 (§4.1): the gap-refresh FETCH pulls only this many hours (the 5h gap
+                               #   06:00->11:00), NOT each source's full window — so the 2nd slot re-pulls
+                               #   nothing. 0/null = DISABLE the cap = fetch the full per-source window as
+                               #   before (~24h) — it does NOT mean "fetch zero hours". Classify/analyse
+                               #   stay incremental (only new articles); the brief still reads the full 24h pool.
+whatsapp_fresh_hours: 6        # an article published within this many hours counts as "fresh" and
+                               #   qualifies at the relevance FLOOR (not the higher day threshold), so a
+                               #   genuinely new story surfaces even if borderline (NF-C2 weight-fresh-higher).
+whatsapp_send_timeout_seconds: 120      # per-message gateway send timeout (openclaw message send)
+whatsapp_gap_stage_timeout_seconds: 1800  # per-stage timeout for each gap-refresh engine subprocess
+language_labels:                # display labels per language code (WhatsApp "sources in <lang>" / translation header)
+  ur: "Urdu (Urdu script)"
+  ar: "Arabic"
+  hi: "Hindi"
+  en: "English"
+whatsapp_bullet_marker: "• "    # md_to_whatsapp: bullet replacement for markdown "- "/"* " list items
+whatsapp_emphasis_marker: "*"   # md_to_whatsapp: WhatsApp bold/heading marker (replaces markdown ** and ##)
+whatsapp_translate_system_prompt: "You are a professional translator. Translate the user's English news brief into natural, fluent {label}. Preserve the structure EXACTLY: same headings, bullets (•), bold (*...*) markers, and the final footer line. Keep proper nouns and organisation names in English (do not transliterate names). Output ONLY the translation — no preamble, no notes."   # {label} = target language name (filled in code)
+
+# --- Daily cost report (NF-14) — to the operator's Telegram, AFTER the 11:00 WhatsApp dispatch ---
+# Once the WhatsApp brief reaches the group + Friend DM, send the operator a cost rollup for the day: the
+# Telegram brief + EVERY WhatsApp chat. The chat list is read from the registry, so adding chats
+# later just works — nothing is hard-coded to a fixed number of groups. Reads the execution_log.
+cost_report_enabled: true
+cost_report_cap_usd: 2.0        # the daily disaster cap, shown as a "% of cap" line (not a limiter)
+cost_report_task_labels:        # task_type bucket -> friendly label in the daily cost report
+  brief: "📲 Telegram brief"
+  whatsapp_brief: "💬 WhatsApp"
+
+# Writer settings
+writer_model: "gemini/gemini-2.5-flash-lite"   # the writer runs on the SUBSCRIPTION (below); this is only the
+                                               # fallback when claude -p fails, and it must not be metered Anthropic
+writer_fallback_model: "gemini/gemini-2.5-flash-lite"   # Fix 3: degrade to Gemini if Anthropic errors/rate-limits/billing-fails
+# --- Writer on subscription (Phase 2 cost move) — run the writer's draft via headless Claude Code
+# (`claude -p`) on the flat Max subscription instead of the metered Anthropic API. ANY failure falls
+# back to the API path above (never silently drops); agent_runs.model_used shows which path ran.
+writer_use_subscription: true         # true = try the subscription (claude -p) first, API fallback. false = API only (today).
+writer_subscription_model: "haiku"    # Claude Code model alias — haiku matches the API writer model (claude-haiku-4-5) and is fast on quota
+writer_subscription_timeout_seconds: 600
+writer_subscription_max_thinking_tokens: 0   # 0 DISABLES Claude Code's extended thinking — REQUIRED, else the headless call loops/hangs (>600s) on the big brief synthesis; with it ~70s
+# --- Analyst on subscription (NF-ANALYST-SUB) — same claude -p seam as the writer, for the analyst's
+# scoring calls. Safe to enable only WITH batching on (analyst_batch_size >1), or it spawns ~150
+# claude -p subprocesses/run instead of ~15. ANY failure falls back to the API (Gemini) — never drops.
+analyst_use_subscription: true        # ON 2026-07-22 (subscription-first move). false = metered API only (the pre-07-22 path).
+analyst_subscription_model: "haiku"   # Claude Code model alias — matches the API analyst model family
+analyst_subscription_timeout_seconds: 600
+analyst_subscription_max_thinking_tokens: 0   # 0 DISABLES Claude Code extended thinking (REQUIRED — else the headless call hangs)
+# --- WhatsApp path on subscription (2026-07-22, subscription-first move) — the 11:00 brief
+# GENERATION and its TRANSLATION route through the same claude -p seam (run_whatsapp_brief.wa_complete).
+# ANY failure falls back to the metered chain exactly as before (primary model, then its fallback),
+# so a run never drops. false = the pre-07-22 metered path byte-for-byte.
+whatsapp_use_subscription: true
+whatsapp_subscription_model: "haiku"          # Claude Code model alias (haiku/sonnet — never opus)
+whatsapp_subscription_timeout_seconds: 600
+whatsapp_subscription_max_thinking_tokens: 0  # 0 DISABLES extended thinking (REQUIRED — else headless hangs)
+# --- Translation validity guard (2026-07-22 incident: the subscription model answered the translate
+# prompt AS AN ASSISTANT and that meta-text reached the group as "Urdu"). An invalid translation
+# retries once on the metered chain; still invalid -> the ENGLISH text is sent + the operator alerted.
+translate_min_length_ratio: 0.25       # translation must be >= this x the source length
+translate_min_script_ratio: 0.2        # share of letters that must be in the target script
+translate_script_langs: {ur: arabic}   # language -> expected script (unlisted languages: length check only)
+writer_primary_language: "en"
+writer_min_relevance: 6
+writer_relevance_floor: 4              # §4.5: backoff may lower the threshold down to here, within the 24h window
+writer_max_themes: 5
+writer_min_themes: 3
+writer_max_articles_per_theme: 6
+writer_window_hours: 24                # §4.5: 24h day-window (reduced from 30 to avoid overlap)
+writer_delivery_account: "newsframer"  # §4.3: exclude article IDs already delivered to this account
+writer_char_overrun_warn_ratio: 1.0     # NF-F2: flag a brief in the run log when chars > cap x this (1.0 = any overrun; 1.15 = only >15% over)
+writer_highlights_count: 8         # target number of highlights
+writer_highlights_min_relevance: 5 # item 6 (2026-06-22): rel >= 5 articles become highlights (was 8)
+# item 1/2 (2026-06-22): the per-theme char TARGET and the total char cap are now DERIVED from
+# theme_size_levels (see the "Per-surface OUTPUT rendering" block). The old writer_per_theme_chars /
+# writer_max_chars_floor / writer_max_chars_ceiling / writer_max_chars are removed (ONE control = the size level).
+
+# Drop-reports (spec §8.5, basic version — Telegram-self only)
+drop_report_window_hours: 168      # 7-day deduped window for investigative drops (explicit exception to the §4.5 24h selection rule)
+drop_report_max: 3                 # max drops per brief; logs overflow (no silent cap)
+drop_report_max_per_source: 1      # NF-NEW3: max drops from any ONE source per brief, so a high-volume
+                                   #   investigative source can't take every Investigations slot
+drop_report_model: "gemini/gemini-2.5-flash-lite"  # cheap model for the short+long drop summaries
+investigations_section_header: "## 🔍 Investigations"  # heading for the Investigations drop section (Telegram brief)
+drop_report_reply_trigger: "more:"  # reply prefix that requests a drop's long write-up (get_drop_report.normalize_slug)
+drop_slug_max_chars: 40             # make_slug: max chars in a drop's reply slug
+drop_slug_max_words: 4              # make_slug: max words used to build the slug
+
+# Per-bundle theme floors (spec §8.1/§8.6) — Telegram brief only. Guarantees each ACTIVE bundle
+# (a source category with >=1 qualifying in-window article) a minimum presence in the OUTPUT, so a
+# high-volume bundle (crypto) can't crowd out a low-frequency one (cybersecurity). A bundle with
+# nothing qualifying is simply absent (no stale padding, §4.5). NOTE: writer_max_themes above now
+# governs the WhatsApp briefs only; the Telegram theme count is the dynamic target below.
+bundle_theme_floors:               # guaranteed minimum themes per active bundle (a bundle with no
+  crypto: 1                        #   qualifying in-window article is simply absent — never padded)
+  geopolitics: 1
+  cybersecurity: 1
+  tech: 1
+bundle_theme_cap: 2                # max themes any single bundle may take (covers 2 big stories, never monopolizes)
+theme_count_multiplier: 1.5        # total Telegram themes = ceil(multiplier * #active bundles); 6 bundles -> 9
+theme_count_max: 14                # absolute safety ceiling on total themes (headroom as bundles grow —
+                                   #   the multiplier above does the scaling; this only caps runaway)
+
+# --- Topic cadence classes (NF-NEW14, §8.1/§8.6) --------------------------------------------
+# Every source category belongs to a CADENCE CLASS that controls how its content is SELECTED for the
+# brief — daily news vs low-frequency/curated topics are handled differently, and which-is-which is
+# CONFIG (adding a topic = assign it a class here; unmapped categories use topic_class_default). A
+# class sets: how far back selection reaches (window_hours), the entry relevance bar (relevance_bar),
+# and how many articles a CLUSTER needs to stand as a theme (min_theme_articles).
+#   regular        = daily news: 24h window + a real >=2-article cluster (a lone article becomes a
+#                    highlight, never its own daily-news theme).
+#   low_frequency  = curated/sparse topics (weekly blogs): a window that covers the cadence, a lower bar
+#                    (curated essays score low but matter), and a SINGLE article MAY stand as a theme.
+# Cross-run duplication across the twice-weekly slots is prevented by the §4.3 deliveries
+# set-difference (a delivered article is excluded from later briefs), so a wider window never re-sends.
+topic_class_default: regular
+topic_class_floor_keeps_single: true   # B (default): each active topic keeps its ONE best story as a theme even if single-source;
+                                       #   ADDITIONAL themes from that topic still need the class min_theme_articles (no single-article
+                                       #   clutter). false = strict A: a single-source story is always a highlight, never its own theme.
+category_classes: {}               # category -> class (unlisted -> topic_class_default), e.g. {weekly_blogs: low_frequency}
+topic_classes:
+  regular:
+    window_hours: null             # null -> writer_window_hours (24h)
+    relevance_bar: null            # null -> writer_min_relevance (the normal gate)
+    min_theme_articles: 2          # a daily-news theme needs >=2 articles; a lone article -> highlight, not a theme
+  low_frequency:
+    window_hours: 168              # 7 days — covers a twice-weekly (or rarer) cadence; dedup via §4.3 deliveries
+    relevance_bar: 3               # admit under-scored curated essays (curated essays score ~3-4)
+    min_theme_articles: 1          # a single article MAY stand as its own theme (rare topic, each post counts)
+
+# ============================================================================
+# Tunables — NOTHING below is hard-coded in code; every value here is read with
+# config.get(<key>, <this default>). Defaults reproduce the current behaviour, so
+# changing your topic set / scale only means editing this file. Anyone reusing this
+# repo tunes here, not in the source or the prompt files.
+# ============================================================================
+
+# --- LLM call parameters (per agent) ---
+writer_temperature: 0.3
+writer_max_tokens: 4500
+classifier_temperature: 0.2
+analyst_temperature: 0.2
+drop_report_temperature: 0.2
+drop_report_max_tokens: 900
+whatsapp_temperature: 0.3
+whatsapp_max_tokens: 4500
+whatsapp_translate_temperature: 0.2
+whatsapp_translate_max_tokens: 6000
+
+# --- Content snippet lengths fed to the LLM (characters) ---
+classifier_content_snippet_chars: 500
+analyst_content_snippet_chars: 1500
+writer_theme_snippet_chars: 600
+writer_highlight_snippet_chars: 400
+drop_report_content_chars: 3000
+
+# --- Batch / retry / output-truncation ---
+classifier_batch_size: 10
+# NF-ANALYST-BATCH: articles scored per analyst LLM call. >1 batches (sends the interests/
+# hypotheses context ~Nx fewer times -> ~halves Gemini input cost); 1 = the original
+# per-article path (byte-for-byte revert). LIVE = 10 (flipped 2026-06-30 after a read-only
+# per-article-vs-batched check on 15 real articles: mean rel diff 0.87, 93% label agreement
+# = equivalent within LLM noise). Revert instantly by setting back to 1.
+analyst_batch_size: 10
+analyst_max_retries: 3
+analyst_retry_backoff_seconds: 2
+analyst_reasoning_max_chars: 200   # NF-ANALYST-TRIM 2026-06-30: 500->200 (output ~4x input cost on Gemini × ~150 articles/run); revert = 500
+analyst_differentiator_max_chars: 150   # NF-ANALYST-TRIM 2026-06-30: 300->150; revert = 300
+analyst_breaking_keywords: ["breaking", "just in", "alert", "urgent", "live:"]  # title keywords that bump actionability (validate_and_clean)
+analyst_actionability_rel_threshold: 8           # rel >= this + IMMEDIATE branch -> actionability bumped to 2
+analyst_breaking_actionability_rel_threshold: 7  # rel >= this + a breaking keyword -> actionability bumped to 2
+analyst_perspective_rel_threshold: 7             # rel >= this -> perspective_invited defaults true for signal/hypothesis labels
+analyst_topic_max_chars: 40                      # max chars kept per analyst topic string (validate_and_clean)
+analyst_max_topics: 8                            # max topics kept per article
+drop_report_short_max_chars: 400
+drop_report_long_max_chars: 2000
+
+# --- Deduplicator text lengths (characters) ---
+deduplicator_embed_text_chars: 500
+deduplicator_price_event_text_chars: 300
+
+# --- Blindspot of the day (NF-D2, spec §8.2) — Ground News Blindspot, scraped (no API/RSS) ---
+# ONE under-covered story/day with a one-line "which side is ignoring it" note. Channel-agnostic:
+# the SAME pick feeds the Telegram brief (spliced) and the WhatsApp 11:00 dispatch. OFF by default
+# => both channels unchanged until blindspot_enabled: true. Per-channel toggles run either alone.
+# Brittle by nature (scrapes a community site) — a parse miss simply skips the line, never crashes.
+blindspot_enabled: true                 # ON 2026-06-17 (both channels); set false to revert instantly
+blindspot_telegram: true                # include in the 06:00 Telegram brief (when enabled)
+blindspot_whatsapp: true                # include in the 11:00 WhatsApp dispatch (when enabled)
+blindspot_url: "https://ground.news/blindspot"
+blindspot_base_url: "https://ground.news"  # domain root used to absolutize relative article links (blindspot._abs_url)
+blindspot_header: "🔦 *Blindspot of the Day*"
+blindspot_max_items: 1                  # max stories/day (spec §8.2: max 1)
+blindspot_min_sources: 5                # skip "thin" stories with fewer sources (spec §8.2)
+blindspot_include_link: true            # show the Ground News article link
+blindspot_fetch_timeout: 25             # HTTP timeout (seconds)
+
+# --- Critic (NF-F1 / §10.13) — pre-send quality check; REPORT-ONLY, never patches or blocks ---
+# Runs between Writer and delivery on the finished Telegram brief, checks structure + anti-
+# hallucination citations, and pings YOUR Telegram (the alert path) with a severity report. It
+# NEVER edits or blocks the send. OFF by default => delivery byte-for-byte unchanged.
+critic_enabled: true                    # ON 2026-06-18 (report-only, never blocks); false to revert
+critic_alert_min_severity: "Important"  # only ping when a finding is at/above this (Critical|Important|Minor)
+critic_severity_labels: ["Critical", "Important", "Minor"]  # severity tier labels, highest-first (exactly 3)
+critic_non_theme_sections: ["highlights", "investigations"]  # lowercase '## ' headings NOT counted as themes (thin-theme check)
+# critic_min_themes / critic_overrun_warn_ratio fall back to the writer_* values when unset.
+critic_currency_total_tolerance_pct: 0.05  # 2026-09-08: a theme's stated total vs the sum of its own components; flag if off by more than this fraction
+
+# --- Length levels (NF-E2 / §6) — per-WhatsApp-chat brief length (short / medium / long) ---
+# Each chat in config/whatsapp_deliveries.yaml may set `length: short|medium|long`; a missing one
+# uses default_length. A level overrides ONLY the brief-shape knobs it lists; anything omitted
+# falls back to the global writer_* value. `medium` is intentionally EMPTY (= today's defaults),
+# so a chat with no length (or length: medium) is byte-for-byte unchanged.
+default_length: medium
+# item 3 (2026-06-22): a chat's `length` (whatsapp_deliveries.yaml) maps onto the ONE size model —
+# short=S, medium=M, long=L — driving the per-theme SIZE only (theme_size_levels). The old per-level
+# theme-count / articles-per-theme overrides are removed (no chat used them); a chat with no `length`
+# uses the surface's theme_size (M). Change a chat's size by setting its `length` in the registry.
+length_to_size: {short: S, medium: M, long: L}
+
+# --- Per-surface OUTPUT rendering (2026-06-19 output-fixes) — UI-ready; Telegram & WhatsApp are
+#     tuned INDEPENDENTLY. agents/surface_render.py reads these. NOTHING is hard-coded in code. ---
+# item 1/2/3 (2026-06-22 rebuild): per-theme SIZE is ONE control. theme_size_levels maps a level to
+# an ABSOLUTE per-theme char TARGET — the writer is told to WRITE each theme to ~this length (the old
+# model only scaled a CEILING, which the LLM underfilled, so L never actually lengthened output). The
+# total char cap is DERIVED, never a separate number:
+#     cap = (body_target + writer_per_theme_source_chars) x #themes
+#           + writer_highlights_count x writer_per_highlight_chars
+# so SIZE depends on the BODY only and the source list never eats into it. The legacy per-chat length
+# (short/medium/long) maps short->S, medium->M, long->L (one model).
+theme_size_levels: {S: 800, M: 1600, L: 3200}   # BODY (synthesis prose) chars/theme, EXCLUDING the Articles list.
+                                                # S=1 / M=2 / L=4 paragraphs. Verified on Haiku's RENDERED body:
+                                                # M~1320/theme (= today's body), L~2270 = ~1.66x (Haiku writes leaner
+                                                # paragraphs at higher counts, so a clean 2.0x isn't reachable via whole
+                                                # paragraphs: 4 paras=1.66x, 5 paras=2.64x). Set L: 4000 for 5 paras (~2.6x).
+writer_per_theme_source_chars: 500         # per-theme allowance for the Articles/source list (added to the cap, NOT counted in the size)
+writer_per_highlight_chars: 250            # highlights allowance per highlight, for the derived total cap
+writer_max_output_tokens_ceiling: 8000     # item 1/2: the LLM output-token budget is DERIVED from the char
+                                           #   cap (~3 chars/token) so L isn't truncated; this is the model's
+                                           #   hard output ceiling (Haiku) the derivation clamps to.
+writer_chars_per_paragraph: 800            # item 1: per-theme BODY is expressed to the LLM as a PARAGRAPH count
+                                           #   = round(body_target / this). M=2 paras, L=4 (=2x), S=1; ~800 chars/para.
+surfaces:
+  telegram:
+    theme_size: S            # S | M | L — M until 2026-07-22 (shorter themes); revert = M
+    categories: ["*"]        # item 4: per-surface content scope by source-category bundle. ["*"] = ALL bundles (current behaviour). Restrict e.g. ["crypto","geopolitics",...]
+    show_source: true        # show the source NAME
+    include_link: true       # attach the article URL
+    link_style: hyperlink    # hyperlink = clickable source name, NO visible URL | plain = raw URL shown
+  whatsapp:
+    theme_size: S            # independent of Telegram — S=800 body chars/theme (shorter than Telegram's M)
+    per_category_theme_cap: 2  # item 6: max themes any one source-category may take in a WA brief (mirrors the Telegram bundle_theme_cap)
+    show_source: true
+    include_link: false      # WhatsApp: TITLE + SOURCE only, no link
+    link_style: hyperlink    # ignored while include_link is false
+# item 7: secondary (non-primary) languages — Urdu today — drop the source list before translating
+# (false = current behaviour). true = keep TITLE + SOURCE in the secondary language too.
+include_sources_in_secondary_language: false
+
+# item 3 — highlight de-duplication: stop the SAME event/topic repeating across the Highlights
+#   (today 4 crypto-regulation items share one identical topic-set). Conservative by default.
+highlight_dedup_enabled: true        # false = today's behaviour (no dedup)
+highlight_dedup_by_cluster: true     # collapse highlights sharing a deduplicator cluster_id, and
+                                     #   drop a highlight whose cluster already anchors a theme
+highlight_dedup_topic_overlap: 1.0   # 1.0 = collapse ONLY identical analyst topic-sets (conservative)
+highlight_dedup_min_shared_topics: 3 # ...and only when >= this many topics overlap (ignores thin 1-2 tags)
+
+# item 5 — WhatsApp topic EXCLUDE filter: drop crypto/markets stories that leak in because the
+#   analyst tags them 'geopolitics affecting markets' (substring 'geopolit' matched the include
+#   list). Per-category, so a crypto-stealing-MALWARE story still reaches the cybersecurity surface.
+#   Registry-overridable per deploy (topic_exclude_keywords in whatsapp_deliveries.yaml). Omitting a
+#   category (or []) = no exclusions for it. Default = "loose" (explicit crypto/prediction-market
+#   only — 2026-06-19); markets/oil/Fed-policy wraps are deliberately KEPT.
+whatsapp_topic_exclude_keywords:
+  geopolitics: ["crypto", "bitcoin", "ether", "stablecoin", "prediction market", "kalshi", "polymarket", "cme group", "cftc", "perpetual futures"]
+  # cybersecurity: []   # intentionally absent -> crypto-stealing-malware still reaches the cyber surface
+
+# --- Analyst topic-weight scale (NF-NEW14 groundwork) — how a user_context.weight nudges relevance ---
+# Each interest/hypothesis in the `user_context` table carries a signed weight (e.g. +3..-3); the
+# Analyst nudges a matching article's relevance by it. This was hard-coded in the analyst prompt;
+# it's now config-driven (default reproduces the prior scale exactly). A future UI sets per-topic
+# weight (NF-NEW14). strong = the nudge for a |weight|=3 interest; mild = for a |weight|=1 interest.
+analyst_weight_strong_points: 3         # |weight|=3 => push relevance ~2-3 points (rendered (strong-1)-strong)
+analyst_weight_mild_points: 1           # |weight|=1 => push relevance ~1 point
+
+# --- Execution log (NF-14 / spec §9) — per-run observability + cost trace into the execution_log table ---
+# run_brief mints a trace_id (NEWSFRAMER_TRACE_ID) shared by a run's engines; agents/run_log mirrors each
+# agent_runs row into execution_log, best-effort + fully isolated (NEVER in the critical path). Additive —
+# agent_runs is untouched. false => skip the mirror entirely (agent_runs-only, as before).
+exec_log_enabled: true
+project_name: newsframer          # project label written to each execution_log row (run_log.build_exec_row)
+
+# --- Delivery ---
+telegram_message_limit: 3800       # per-message char cap (Telegram hard cap is 4096)
+gateway_send_timeout_seconds: 120  # per-message timeout for the gateway subprocess send (deliver.gateway_send)
+telegram_alert_timeout_seconds: 20 # timeout for the out-of-band Telegram alert (deliver.send_alert)
+operator_tz_offset_hours: 0        # used only if operator_timezone (top of file) is unset or unknown
+deliver_wait_seconds: 240          # no-delivery fix (2026-06-14): deliver_brief waits up to this long
+deliver_poll_seconds: 15           #   for today's fresh brief before giving up (covers a build that
+                                   #   finishes just after deliver starts). 0 = old no-wait behaviour.
+
+# --- Double-generation / retry-redelivery fix (run lock + idempotent delivery) ---
+# Root cause: on a slow morning the build runs longer than the cron command timeout, so OpenClaw
+# re-invokes the job while the first build is still running -> a 2nd/3rd CONCURRENT pipeline (each
+# re-runs the analyst = ~2-3x spend), and a retry after a confirmed-but-unrecorded send re-delivers.
+run_lock_enabled: true             # only ONE build runs per slot+JST-day; a concurrent/retry invocation no-ops (stops the 2x analyst spend). false = old behaviour.
+run_lock_stale_minutes: 60         # a held lock older than this = a crashed run, reclaimed. MUST exceed the real max build runtime (~38 min observed) so a live long build is never reclaimed.
+delivery_idempotent: true          # skip the send if today's brief was already delivered to this surface (no duplicate on a retry). false = old behaviour.
+
+# --- Independent gateway-liveness watchdog (gateway_watchdog.py) ---
+# Run by a Windows Scheduled Task DIRECTLY (not a gateway cron), so it works when the gateway itself
+# died — the blind spot that let a ~2-day WhatsApp outage go silent (2026-06-25). Pings the gateway;
+# if down, restarts it + alerts Telegram (missed crons then catch up on reconnect).
+gateway_watchdog_enabled: true
+gateway_watchdog_ping_timeout_seconds: 25   # wait this long for the gateway's `cron list` before declaring it down
+gateway_task_name: "OpenClaw Gateway"       # the Windows scheduled task the watchdog restarts when the gateway is down
+
+# --- Run-health watchdog: slot start hours (operator timezone; keep in step with your schedules) ---
+slot_hours:
+  telegram: 6
+  whatsapp: 11
+
+# Deduplicator settings
+deduplicator_embedding_model: "gemini/gemini-embedding-001"
+deduplicator_embedding_dimensions: 768
+deduplicator_similarity_threshold: 0.85
+deduplicator_window_hours: 48
+deduplicator_price_event_window_hours: 12
+deduplicator_high_similarity_threshold: 0.90
+deduplicator_price_event_keywords: ["price", "hits", "drops", "surges", "soars", "plunge", "plunges", "rally", "rallies", "recovers", "breaches", "tests", "slumps", "crashes", "breakout", "bottoms", "tops", "all-time high", "ath", "%", "$", "btc", "bitcoin", "eth", "ethereum", "sol", "election", "ceasefire", "ruling", "verdict", "shutdown"]  # a cluster resolves to price_event if a member title/topic carries one of these
+
+# --- Title-dedup (NF-NEW10): collapse same-story wire pile-ups BEFORE the analyst ---
+# Reuses the deduplicator's clusters (cluster_id); for each still-alive multi-member
+# cluster, a cheap titles-only LLM confirms "one event?" and on yes soft-deletes all but
+# the originator, so the analyst scores one copy per story. Soft-delete only (audit trail
+# intact). agents/title_dedup.py is DRY by default; --apply collapses.
+title_dedup_enabled: true              # 2026-06-16: ACTIVATED. Runs before the analyst in run_brief +
+                                       #   the 11:00 gap-refresh; collapses same-story clusters to the
+                                       #   representative set (earliest + most-developed; +left/center/right
+                                       #   for geopolitics once the source bias tags are seeded). Set false to disable.
+title_dedup_model: "gemini/gemini-2.5-flash-lite"   # titles-only confirm; cheapest model
+title_dedup_window_hours: 48           # match the deduplicator window (cluster_id is set there)
+title_dedup_only_unscored: true        # only collapse copies the analyst has NOT scored yet (pre-paid stage)
+title_dedup_temperature: 0             # deterministic yes/no
+title_dedup_max_tokens: 20             # the reply is just {"same_event": true|false}
+title_dedup_bias_categories: ["geopolitics"]  # NF-NEW10 v2: clusters in these
+                                       #   categories ALSO keep one source per Ground-News bias side
+                                       #   (left/center/right) when present. Other topics get only the
+                                       #   temporal (earliest + most-developed) keepers. Bias axis needs
+                                       #   the source bias tags seeded (NF-D1); until then it's a no-op.
+title_dedup_max_keep: 5                # NF-NEW10 v3: keep up to N articles per same-story cluster
+                                       #   (target = min(N, this)). Coverage = importance: a story many
+                                       #   outlets ran keeps more (so it can form its own theme); a cluster
+                                       #   of <=N keeps everything; single-source stories are never touched.
+                                       #   Bias categories add their left/center/right reps on top of this.
+
+# --- NF-C1: news-context-shift sequencing (spec §4.4) -------------------------------------
+# A Writer post-pass that emits a one-line "what changed" note when an ongoing story's tracked
+# FACT shifts day-over-day (data-to-data per §4.3; never diffs prose / prior brief text).
+# OFF BY DEFAULT: when sequencing_enabled is false the Writer never calls it and the brief is
+# byte-for-byte unchanged. State persists in the Supabase `tracked_threads` table; weekly hard
+# reset on the Monday-06:00-JST boundary (§4.2). Telegram brief only for now (WhatsApp = backlog).
+sequencing_enabled: true               # master switch (ON 2026-06-17; set false to revert instantly)
+sequencing_placement: ["subsection", "inline"]  # where notes show: 'subsection' (## What Changed)
+                                       #   and/or 'inline' (woven into the matching theme). Both on.
+what_changed_section_header: "## 📈 What Changed"  # heading for the sequencing 'What Changed' subsection (Telegram brief)
+brief_section_order: ["investigations", "what_changed", "blindspot"]  # order the deterministic post-pass sections are spliced into the Telegram brief
+source_skew_min_sources: 3      # NF-D3/§8.2: min DISTINCT placed-bias sources before a theme can be flagged source-skewed
+source_skew_ratio: 0.75         # one lean must be >= this share of placed sources (opposing lean absent) to warn
+coverage_warning_left: "_⚠ Left-leaning media only — opposing view absent._"   # one-sided-coverage note (left) the writer appends as a theme's final line (NF-NEW10c)
+coverage_warning_right: "_⚠ Right-leaning media only — opposing view absent._"  # one-sided-coverage note (right)
+quiet_day_text: "_Quiet news day — fewer items than usual._"  # prepended to a thin-day brief (Telegram + WhatsApp)
+# Investigative drop short+long summary system prompt (writer.py DROP_SUMMARY_SYSTEM)
+drop_summary_system_prompt: |-
+  You summarize an investigative-journalism / OSINT report for a personal news brief.
+  Return ONLY a JSON object: {"short": "...", "long": "..."}.
+  - short: ONE factual sentence, <= 280 characters, no hype, no speculation.
+  - long: 2-4 short paragraphs, <= 1200 characters: what the investigation found, the method/evidence, who is involved, and why it matters.
+  Use ONLY facts in the provided article. No markdown fences, no commentary outside the JSON.
+# Sequencing structured-fact extraction system prompt (thread_tracker.py EXTRACT_SYSTEM)
+sequencing_extract_system_prompt: |-
+  You extract ONE structured, factual data point from news article text about a single ongoing story, for day-over-day change tracking. Return ONLY a JSON object:
+  {"delta_type": "...", "value": "...", "unit": "...", "short_fact": "...", "confidence": 0.0}
+  - delta_type: one of magnitude, cumulative, status, reversal, scope, attribution, forecast — the KIND of fact most central to this story's progression.
+  - value: the current value. A NUMBER (as a string is fine) for magnitude/cumulative/forecast (e.g. '47', '$5M', '20000'); a SHORT label for status/reversal/scope/attribution (e.g. 'passed committee', 'arson', 'Gaza+Lebanon').
+  - unit: e.g. 'dead', 'acres', 'USD', '%', or '' if none.
+  - short_fact: <=80 chars, the bare fact (e.g. 'death toll 47').
+  - confidence: 0..1 that this value is stated (not inferred) in the text.
+  Use ONLY facts present in the text. If no trackable hard fact, return value ''. No prose.
+sequencing_model: "gemini/gemini-2.5-flash-lite"  # Stage A structured-fact extraction (cheapest)
+sequencing_temperature: 0              # deterministic extraction
+sequencing_max_tokens: 200             # one small JSON fact per story
+sequencing_snippet_chars: 1200         # per-article text given to the extractor
+sequencing_match_similarity: 0.83      # Stage 0: cosine to call today's story the SAME thread
+sequencing_context_window_hours: 168   # 7-day context window for sequencing (§4.4; NOT selection)
+sequencing_watchlist_lookback_days: 30 # tagged long-running stories earn the 30-day tail
+sequencing_trajectory_points: 3        # keep last-N points per thread (cumulative tally path)
+sequencing_max_threads_per_run: 40     # cap Stage A calls/run (cost guard)
+sequencing_max_notes_per_brief: 5      # cap shift notes shown in one brief
+sequencing_min_confidence: 0.5         # drop low-confidence extractions (0 = keep all)
+sequencing_weekly_reset_day: "mon"     # §4.2 hard-reset weekday (JST 06:00 boundary)
+sequencing_materiality:                # per-type bars; a change must clear ABS or PCT-of-prior
+  magnitude_abs: 1                      #   single value moved (casualties/money/units)
+  magnitude_pct: 0.15
+  cumulative_abs: 1                     #   running tally — any real climb counts
+  cumulative_pct: 0.0
+  forecast_abs: 1                       #   prediction vs actual divergence
+  forecast_pct: 0.10
+# NF-C1a — per-category materiality overrides (config-driven; a future settings-UI writes here).
+# A story whose SOURCE CATEGORY (the bundle, §8.1) matches a key below uses THESE bars instead of
+# the global sequencing_materiality. Set only the keys you want to change; the rest fall back to
+# the global value. A category NOT listed here uses the global bars unchanged.
+#   crypto: prices are noisy, so a move counts only at >=10% (BTC must go ~60k -> 66k+, not on a
+#   1k wiggle). magnitude_abs: 0 DISABLES the absolute floor so ONLY the percentage bar applies.
+sequencing_materiality_overrides:
+  crypto:
+    magnitude_pct: 0.10                 # a price move is material only at >=10%
+    magnitude_abs: 0                    # 0 = no absolute floor -> percentage-only (kills tiny noise)
+# Units that mark a numeric fact as a PRICE -> rendered "was $X on DAY, now $Y (+p%)" and humanized
+# to K/M/B. Case-insensitive. Add currencies/symbols as needed (no code change).
+sequencing_price_units: ["usd", "$", "dollar", "dollars", "eur", "gbp", "jpy", "yen"]
+sequencing_watchlist: []               # optional named threads that always get the 30-day tail
+                                       #   (autodetection covers recurring stories; this is additive)

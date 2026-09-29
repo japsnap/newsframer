@@ -1,0 +1,34 @@
+# WhatsApp delivery registry — TEMPLATE (committed). Copy to whatsapp_deliveries.yaml
+# (gitignored) and fill in real targets. See whatsapp_deliveries.yaml header for how group
+# JIDs are captured. DMs need only the E.164 phone number.
+account: my-whatsapp   # the OpenClaw WhatsApp account id you paired
+translate_model: gemini/gemini-2.5-flash-lite
+
+topic_keywords:
+  geopolitics: ["geopolit", "middle east", "international affairs", "foreign policy", "diplomacy", "ceasefire", "sanction", "nato", "united nations", "security council", "authoritarian", "human rights", "human trafficking", "refugee", "asylum", "genocide", "war crime", "occupation", "coup", "press freedom"]
+  science: ["science", "research", "space", "climate"]
+  cybersecurity: ["cyber", "malware", "ransomware", "vulnerability", "exploit", "breach", "cve", "zero-day"]
+
+# Optional per-deploy override of the per-category EXCLUDE filter (item 5, 2026-06-19): drop a
+# story from a category even if an include keyword matched — e.g. crypto/markets stories the
+# analyst tagged 'geopolitics affecting markets'. Omit this block to use the config default
+# (whatsapp_topic_exclude_keywords in config/models.yaml). A category with no key (or []) has NO
+# exclusions — e.g. cybersecurity below is intentionally absent so crypto-MALWARE still gets through.
+# topic_exclude_keywords:
+#   geopolitics: ["crypto", "bitcoin", "ether", "stablecoin", "prediction market", "kalshi", "polymarket", "cme group", "cftc", "perpetual futures"]
+
+deliveries:
+  - name: "Example Group"
+    target: "000000000000000000@g.us"   # real group JID, captured once
+    kind: group
+    categories: ["geopolitics", "science"]
+    languages: ["en", "es"]
+    length: medium                       # short | medium | long (optional; omitted => default_length)
+  - name: "Example DM"
+    target: "+10000000000"               # E.164 phone number for a direct chat
+    kind: dm
+    categories: ["geopolitics", "cybersecurity"]
+    languages: ["en"]
+    length: short                        # this chat gets a tighter brief (fewer themes, shorter)
+    # also supported per chat (optional opt-outs for the appended messages):
+    #   blindspot: false     # skip the Blindspot-of-the-day line for this chat

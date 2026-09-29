@@ -1,0 +1,1024 @@
+"""
+OpenClaw Writer Agent
+---------------------
+Reads analyzed articles within the configured freshness window, groups them into themes,
+generates a fact-organized briefing in the user's primary language, and stores it in `briefings`.
+
+v1 scope: fact synthesis only, no original commentary.
+Phase 2 will add post-draft generation in user voice.
+"""
+
+import os
+import sys
+import json
+import time
+import yaml
+from collections import defaultdict
+from datetime import datetime, timezone, timedelta
+from litellm import completion
+from supabase import create_client
+from dotenv import load_dotenv
+
+# writer.py runs BOTH as a script (python agents/writer.py, agents/ on sys.path[0])
+# and as an imported module (run_whatsapp_brief.py does `from agents.writer import ...`,
+# with only the repo root on the path). Put this file's own dir on the path so the
+# sibling helpers below resolve in BOTH cases.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from run_log import record_run  # noqa: E402
+from llm_json import parse_json_obj  # noqa: E402
+from drop_reports import (  # noqa: E402
+    make_slug, is_woven, render_investigations_section, splice_investigations, pick_diverse,
+)
+from bundle_floors import select_themes_with_floors, cluster_bundle  # noqa: E402
+import topic_classes as tc  # noqa: E402  (NF-NEW14 topic cadence classes)
+from char_monitor import overrun_flag, strip_incomplete_tail, truncation_flag  # noqa: E402  (NF-F2 over-cap flag; 2026-09-04 mid-item truncation guard)
+from link_monitor import bare_url_flag  # noqa: E402  (NF-NEW1: bare-URL quality flag)
+from window_audit import window_span_report  # noqa: E402  (NF-NEW2: provable 24h window)
+import thread_tracker as seq  # noqa: E402  (NF-C1 §4.4 sequencing; only invoked when enabled)
+from source_skew import skew_warning, coverage_note  # noqa: E402  (NF-D3 skew flag + NF-NEW10c one-sided note)
+import surface_render as srf  # noqa: E402  (2026-06-19: per-surface size + highlight dedup)
+from tense_monitor import tense_mismatch_flag  # noqa: E402  (2026-09-05: highlight tense/certainty guard)
+from critic import find_currency_mismatches, find_theme_total_mismatches  # noqa: E402  (2026-09-08: yen->$ + theme-total guard)
+
+load_dotenv()
+
+try:  # Windows consoles default to cp1252 and crash printing 🔍 / non-latin glyphs.
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
+# Asia/Tokyo (JST = UTC+9, no DST). The brief date/header must be JST, not UTC: a 06:00 JST
+# run is 21:00 UTC the prior day, so a UTC date would show YESTERDAY. The offset is config-driven
+# (operator_tz_offset_hours) — JST is defined just after _CFG loads, below.
+
+
+def load_config():
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(base_dir, "config", "models.yaml"), "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+# --- Tunables (sourced from config; defaults reproduce prior behaviour). See config/models.yaml. ---
+try:
+    _CFG = load_config()
+except Exception:
+    _CFG = {}
+from operator_tz import operator_tz
+JST = operator_tz(_CFG)  # operator timezone (config: operator_timezone)
+THEME_SNIPPET_CHARS = int(_CFG.get("writer_theme_snippet_chars", 600))
+HIGHLIGHT_SNIPPET_CHARS = int(_CFG.get("writer_highlight_snippet_chars", 400))
+DROP_CONTENT_CHARS = int(_CFG.get("drop_report_content_chars", 3000))
+DROP_TEMPERATURE = float(_CFG.get("drop_report_temperature", 0.2))
+DROP_MAX_TOKENS = int(_CFG.get("drop_report_max_tokens", 900))
+DROP_SHORT_MAX_CHARS = int(_CFG.get("drop_report_short_max_chars", 400))
+DROP_LONG_MAX_CHARS = int(_CFG.get("drop_report_long_max_chars", 2000))
+COVERAGE_WARNING_LEFT = str(_CFG.get("coverage_warning_left", "_⚠ Left-leaning media only — opposing view absent._"))
+COVERAGE_WARNING_RIGHT = str(_CFG.get("coverage_warning_right", "_⚠ Right-leaning media only — opposing view absent._"))
+QUIET_DAY_TEXT = str(_CFG.get("quiet_day_text", "_Quiet news day — fewer items than usual._"))
+
+
+def load_prompt_files():
+    """Load the four prompt files. User edits these to customize Writer behavior."""
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    prompts_dir = os.path.join(base_dir, "prompts", "writer")
+    parts = []
+    for fname in ["system_prompt.txt", "tone.txt", "format_rules.txt"]:
+        path = os.path.join(prompts_dir, fname)
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                parts.append(f.read().strip())
+        else:
+            print(f"  WARN: prompt file missing: {path}")
+    return "\n\n".join(parts)
+
+
+def get_supabase():
+    return create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY"))
+
+
+def load_user_context(sb):
+    r = (
+        sb.table("user_context")
+        .select("id, topic, stance, reasoning, confidence, kind, weight")
+        .eq("active", True)
+        .execute()
+    )
+    rows = r.data or []
+    interests = [row for row in rows if row.get("kind") == "interest"]
+    hypotheses = [
+        row for row in rows
+        if row.get("kind") == "hypothesis"
+        and row.get("status") in ("active", "partially_confirmed", "pending_confirmation")
+    ]
+    by_id = {row["id"]: row for row in rows}
+    return {"interests": interests, "hypotheses": hypotheses, "by_id": by_id}
+
+
+def load_window_scored_articles(sb, window_hours, exclude_account=None):
+    """All fresh, alive, analyst-scored articles in the window, MINUS any already
+    delivered to `exclude_account` (§4.3 set-difference). The relevance threshold /
+    backoff is applied by the caller, not here. Returns (articles_with_score,
+    total_in_window). Window-first + paged + chunked to avoid PostgREST's 1000-row cap.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat()
+
+    # 1. Fresh, alive articles in the window (paged).
+    arts = []
+    PAGE = 1000
+    start = 0
+    while True:
+        r = (
+            sb.table("raw_articles")
+            .select("id, source_id, title, url, content_raw, published_at, cluster_id")
+            .gte("published_at", cutoff)
+            .is_("deleted_at", "null")
+            .order("published_at", desc=True)
+            .range(start, start + PAGE - 1)
+            .execute()
+        )
+        batch = r.data or []
+        arts.extend(batch)
+        if len(batch) < PAGE:
+            break
+        start += PAGE
+    total_in_window = len(arts)
+    if not arts:
+        return [], 0
+
+    window_ids = [a["id"] for a in arts]
+
+    # 2. §4.3 set-difference: which of these were already delivered to this account?
+    #    Scoped to the window ids (chunked) so it can't hit the 1000-row cap.
+    delivered = set()
+    if exclude_account:
+        for i in range(0, len(window_ids), 50):
+            chunk = window_ids[i:i + 50]
+            d = (
+                sb.table("deliveries")
+                .select("article_id")
+                .eq("account", exclude_account)
+                .in_("article_id", chunk)
+                .execute()
+            )
+            for row in (d.data or []):
+                if row.get("article_id"):
+                    delivered.add(row["article_id"])
+
+    # 3. Scores for the non-delivered in-window articles (chunked).
+    candidate_ids = [i for i in window_ids if i not in delivered]
+    scores_by_article = {}
+    for i in range(0, len(candidate_ids), 50):
+        ids_chunk = candidate_ids[i:i + 50]
+        r2 = (
+            sb.table("analyst_scores")
+            .select(
+                "article_id, relevance_score, label, hypotheses, topics, actionability, "
+                "perspective_invited, reasoning, differentiator"
+            )
+            .in_("article_id", ids_chunk)
+            .execute()
+        )
+        for row in (r2.data or []):
+            scores_by_article[row["article_id"]] = row
+
+    # 4. Attach scores; keep only scored, non-delivered articles. No threshold here.
+    out = []
+    for a in arts:
+        if a["id"] in delivered:
+            continue
+        s = scores_by_article.get(a["id"])
+        if s:
+            a["score"] = s
+            out.append(a)
+    return out, total_in_window
+
+
+def load_sources_map(sb):
+    r = sb.table("sources").select("id, name").execute()
+    return {s["id"]: s.get("name", "Unknown") for s in (r.data or [])}
+
+
+def load_source_categories(sb):
+    """source_id -> category (the 'bundle' an article belongs to, spec §8.1)."""
+    r = sb.table("sources").select("id, category").execute()
+    return {s["id"]: s.get("category") for s in (r.data or [])}
+
+
+def composite_score(article):
+    """Combined ranking score."""
+    s = article["score"]
+    rel = s.get("relevance_score") or 0
+    act = s.get("actionability") or 0
+    return rel * 10 + act * 15
+
+
+def cluster_by_topic_overlap(articles, max_themes, max_per_theme):
+    """Greedy clustering by shared topic tags. Returns (clusters, leftovers).
+    Clusters: list of article-lists, sorted by total composite score, capped at max_themes.
+    Leftovers: articles that did NOT make it into the returned clusters.
+    """
+    ordered = sorted(articles, key=composite_score, reverse=True)
+
+    all_clusters = []
+    used_ids = set()
+
+    for seed in ordered:
+        if seed["id"] in used_ids:
+            continue
+        seed_topics = set(seed["score"].get("topics") or [])
+        if not seed_topics:
+            all_clusters.append([seed])
+            used_ids.add(seed["id"])
+            continue
+
+        cluster = [seed]
+        used_ids.add(seed["id"])
+
+        for other in ordered:
+            if other["id"] in used_ids:
+                continue
+            if len(cluster) >= max_per_theme:
+                break
+            other_topics = set(other["score"].get("topics") or [])
+            shared = seed_topics & other_topics
+            if len(shared) >= 2 or (len(shared) >= 1 and (len(seed_topics) <= 2 or len(other_topics) <= 2)):
+                cluster.append(other)
+                used_ids.add(other["id"])
+
+        all_clusters.append(cluster)
+
+    # Rank by composite sum
+    all_clusters.sort(key=lambda c: sum(composite_score(a) for a in c), reverse=True)
+
+    # Top max_themes become themes
+    themes = all_clusters[:max_themes]
+    theme_article_ids = {a["id"] for cluster in themes for a in cluster}
+
+    # Everything else is leftover candidates for highlights
+    leftovers = [a for a in articles if a["id"] not in theme_article_ids]
+
+    return themes, leftovers
+
+
+def pick_highlights(leftovers, count, min_relevance):
+    """Select top-N highest-relevance singleton articles from leftovers."""
+    eligible = [a for a in leftovers if (a["score"].get("relevance_score") or 0) >= min_relevance]
+    eligible.sort(key=composite_score, reverse=True)
+    return eligible[:count]
+
+
+def build_context_block(context):
+    """Mirror of Analyst's logic but read-only context for Writer."""
+    interests = context.get("interests", [])
+    hypotheses = context.get("hypotheses", [])
+    lines = []
+
+    lines.append("USER INTERESTS (use to prioritize themes; do not editorialize):")
+    if not interests:
+        lines.append("(none specified)")
+    else:
+        for it in interests:
+            w = it.get("weight")
+            w_str = f"{w:+d}" if isinstance(w, int) else "0"
+            lines.append(f"- topic='{it.get('topic','')}' weight={w_str}")
+    lines.append("")
+
+    lines.append("ACTIVE HYPOTHESES (surface when articles relate, factually):")
+    if not hypotheses:
+        lines.append("(none active)")
+    else:
+        for h in hypotheses:
+            lines.append(
+                f"- id={h['id']} | topic={h.get('topic','')} | stance={h.get('stance','')}"
+            )
+    return "\n".join(lines)
+
+
+def build_articles_block(clusters, sources_map, by_hypothesis_id, coverage_notes=None):
+    """Format clusters as structured input for Writer LLM. coverage_notes (NF-NEW10c,
+    optional) is a list aligned with clusters; 'left'/'right' marks a one-sided theme so the
+    LLM appends the media-only warning to exactly that section."""
+    lines = ["CLUSTERED ARTICLES (each cluster becomes one theme):"]
+    for i, cluster in enumerate(clusters, 1):
+        note = (coverage_notes[i - 1] if coverage_notes and i - 1 < len(coverage_notes) else None)
+        tag = f" [ONE-SIDED COVERAGE: {note}]" if note in ("left", "right") else ""
+        lines.append(f"\n=== Cluster {i} ({len(cluster)} articles){tag} ===")
+        for a in cluster:
+            s = a["score"]
+            src_name = sources_map.get(a.get("source_id"), "Unknown")
+            hyps = s.get("hypotheses") or []
+            hyp_strs = []
+            for h in hyps:
+                hid = h.get("id")
+                align = h.get("alignment")
+                meta = by_hypothesis_id.get(hid)
+                if meta:
+                    hyp_strs.append(
+                        f"matches hypothesis '{meta.get('topic')}' "
+                        f"(stance={meta.get('stance')}) alignment={align:+d}"
+                    )
+            hyp_str = "; ".join(hyp_strs) if hyp_strs else "none"
+
+            lines.append(
+                f"\nArticle:\n"
+                f"  url: {a.get('url','')}\n"
+                f"  source: {src_name}\n"
+                f"  title: {a.get('title','')}\n"
+                f"  published_at: {a.get('published_at','')}\n"
+                f"  relevance: {s.get('relevance_score')}\n"
+                f"  actionability: {s.get('actionability')}\n"
+                f"  topics: {', '.join(s.get('topics') or [])}\n"
+                f"  differentiator: {s.get('differentiator','') or '(none)'}\n"
+                f"  analyst_reasoning: {s.get('reasoning','') or '(none)'}\n"
+                f"  hypothesis_matches: {hyp_str}\n"
+                f"  perspective_invited: {s.get('perspective_invited')}\n"
+                f"  content_snippet: {(a.get('content_raw') or '')[:THEME_SNIPPET_CHARS].replace(chr(10), ' ')}"
+            )
+    return "\n".join(lines)
+
+
+def build_highlights_block(highlights, sources_map):
+    if not highlights:
+        return "HIGHLIGHTS (none qualifying — omit the ## Highlights section entirely):"
+    lines = ["HIGHLIGHTS (each becomes one bullet in the ## Highlights section):"]
+    for h in highlights:
+        s = h["score"]
+        src_name = sources_map.get(h.get("source_id"), "Unknown")
+        lines.append(
+            f"\nHighlight:\n"
+            f"  url: {h.get('url','')}\n"
+            f"  source: {src_name}\n"
+            f"  title: {h.get('title','')}\n"
+            f"  relevance: {s.get('relevance_score')}\n"
+            f"  topics: {', '.join(s.get('topics') or [])}\n"
+            f"  differentiator: {s.get('differentiator','') or '(none)'}\n"
+            f"  analyst_reasoning: {s.get('reasoning','') or '(none)'}\n"
+            f"  content_snippet: {(h.get('content_raw') or '')[:HIGHLIGHT_SNIPPET_CHARS].replace(chr(10), ' ')}"
+        )
+    return "\n".join(lines)
+
+
+def _per_theme_target_line(per_theme_target, chars_per_paragraph=1000):
+    """item 1 (2026-06-22): the per-theme DEPTH instruction. Expressed as a scaled PARAGRAPH count
+    (which the model follows far more reliably than a raw char target) PLUS the char target, so the
+    size level visibly drives length (M~3 paragraphs, L~6 = ~2x). Empty when no target -> prompt
+    unchanged. chars_per_paragraph is config-injectable so the paragraph<->char mapping isn't baked in."""
+    if not per_theme_target:
+        return ""
+    t = int(per_theme_target)
+    paras = max(1, round(t / max(1, int(chars_per_paragraph))))
+    return (f"- Per-theme BODY depth: write each theme's synthesis prose as {paras} substantial "
+            f"paragraph(s) of about ~{int(chars_per_paragraph)} characters each (roughly 4-5 sentences) — "
+            f"about ~{t} characters of BODY text total (the multi-source synthesis ONLY; do NOT count the "
+            f"'**Articles:**' source list, which is separate). Match this depth in EVERY theme; scale the "
+            f"number of paragraphs to the count given.\n")
+
+
+def build_user_prompt(clusters, highlights, sources_map, by_hypothesis_id, context,
+                     total_in_window, relevant_count, briefing_date, max_chars, coverage_notes=None,
+                     shift_notes=None, per_theme_target=None, chars_per_paragraph=1000):
+    context_block = build_context_block(context)
+    articles_block = build_articles_block(clusters, sources_map, by_hypothesis_id, coverage_notes)
+    highlights_block = build_highlights_block(highlights, sources_map)
+    theme_count = len(clusters)
+    highlight_count = len(highlights)
+
+    instructions = (
+        f"\n\nGenerate the briefing now.\n"
+        f"- Date for header: {briefing_date}\n"
+        f"- Number of themes: {theme_count}\n"
+        f"- Number of highlights: {highlight_count}\n"
+        f"- Articles total in window: {total_in_window}\n"
+        f"- Articles meeting relevance cutoff: {relevant_count}\n"
+        f"- Hard character limit: {max_chars}\n"
+        f"{_per_theme_target_line(per_theme_target, chars_per_paragraph)}"
+        f"- Footer must use these exact numbers in this format:\n"
+        f"  ---\n"
+        f"  _Briefing generated from {total_in_window} articles. {relevant_count} made the relevance cutoff. {theme_count} themes, {highlight_count} highlights._\n"
+        f"- If highlights count is 0, OMIT the ## Highlights section entirely.\n"
+        f"- One-sided coverage (NF-NEW10c): if a cluster header is marked "
+        f"'[ONE-SIDED COVERAGE: left]', make the FINAL line of that theme's section exactly "
+        f"'{COVERAGE_WARNING_LEFT}'; for "
+        f"'[ONE-SIDED COVERAGE: right]' use "
+        f"'{COVERAGE_WARNING_RIGHT}'. Add nothing for "
+        f"clusters without that marker.\n"
+        f"- Output ONLY the Markdown briefing. No preamble, no postamble.\n"
+    )
+
+    # NF-C1 (§4.4): pre-computed, data-verified day-over-day shift notes to weave inline into the
+    # named theme. Empty/None -> no change to the prompt (byte-for-byte identical when off).
+    if shift_notes:
+        seq_lines = "\n".join(
+            f"  - Theme {n.get('theme_idx', 0) + 1}: {n.get('line', '')}" for n in shift_notes if n.get("line"))
+        if seq_lines:
+            instructions += (
+                "\n- NEWS-SHIFT UPDATES (data-verified, §4.4): each line below is a pre-computed factual "
+                "change since prior days for a specific theme. Weave the matching update into that "
+                "theme's prose as ONE natural sentence. You may rephrase surrounding words but NEVER "
+                "alter the numbers, names, status words, or the source link inside it:\n" + seq_lines + "\n")
+
+    return f"{context_block}\n\n{articles_block}\n\n{highlights_block}\n{instructions}"
+
+
+def estimate_cost(config, model, tokens_in, tokens_out):
+    pricing = (config.get("pricing") or {}).get(model)
+    if not pricing:
+        return 0.0
+    return (tokens_in / 1_000_000) * pricing["input"] + (tokens_out / 1_000_000) * pricing["output"]
+
+
+def _log_writer_skip(sb, reason, total_in_window):
+    """Record a no-brief outcome so a quiet/missed run is observable (the delivery layer alerts)."""
+    try:
+        sb.table("agent_runs").insert(
+            {"agent_name": "writer", "model_used": "none", "status": reason}
+        ).execute()
+    except Exception as e:
+        print(f"  (could not log writer skip: {e})")
+    print(f"  Writer skip logged: {reason} (in-window={total_in_window})")
+
+
+# --- Drop-reports (spec 8.5, basic). Telegram-self path only; WhatsApp untouched. ---
+DROP_SUMMARY_SYSTEM = str(_CFG.get("drop_summary_system_prompt", (
+    "You summarize an investigative-journalism / OSINT report for a personal news brief.\n"
+    'Return ONLY a JSON object: {"short": "...", "long": "..."}.\n'
+    "- short: ONE factual sentence, <= 280 characters, no hype, no speculation.\n"
+    "- long: 2-4 short paragraphs, <= 1200 characters: what the investigation found, the "
+    "method/evidence, who is involved, and why it matters.\n"
+    "Use ONLY facts in the provided article. No markdown fences, no commentary outside the JSON."
+)))
+
+
+def load_investigative_ids(sb):
+    """Source ids whose category is 'investigative' (the drop-report sources, spec 8.5)."""
+    r = sb.table("sources").select("id").eq("category", "investigative").execute()
+    return {row["id"] for row in (r.data or [])}
+
+
+def load_drop_report_candidates(sb, window_hours, investigative_ids, exclude_account=None):
+    """Scored, non-delivered articles from investigative sources within a wider
+    (7-day) window. Mirrors load_window_scored_articles but scoped to drop sources,
+    so low-frequency investigative drops actually surface (spec 8.5; §4.3 dedup)."""
+    if not investigative_ids:
+        return []
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat()
+    inv = list(investigative_ids)
+    arts = []
+    for i in range(0, len(inv), 50):
+        chunk = inv[i:i + 50]
+        start = 0
+        while True:
+            r = (
+                sb.table("raw_articles")
+                .select("id, source_id, title, url, content_raw, published_at")
+                .in_("source_id", chunk)
+                .gte("published_at", cutoff)
+                .is_("deleted_at", "null")
+                .order("published_at", desc=True)
+                .range(start, start + 999)
+                .execute()
+            )
+            batch = r.data or []
+            arts.extend(batch)
+            if len(batch) < 1000:
+                break
+            start += 1000
+    if not arts:
+        return []
+    ids = [a["id"] for a in arts]
+    delivered = set()
+    if exclude_account:
+        for i in range(0, len(ids), 50):
+            d = (
+                sb.table("deliveries").select("article_id")
+                .eq("account", exclude_account).in_("article_id", ids[i:i + 50]).execute()
+            )
+            for row in (d.data or []):
+                if row.get("article_id"):
+                    delivered.add(row["article_id"])
+    cand_ids = [i for i in ids if i not in delivered]
+    scores = {}
+    for i in range(0, len(cand_ids), 50):
+        r2 = (
+            sb.table("analyst_scores")
+            .select("article_id, relevance_score, label, hypotheses, topics, actionability, "
+                    "perspective_invited, reasoning, differentiator")
+            .in_("article_id", cand_ids[i:i + 50]).execute()
+        )
+        for row in (r2.data or []):
+            scores[row["article_id"]] = row
+    out = []
+    for a in arts:
+        if a["id"] in delivered:
+            continue
+        s = scores.get(a["id"])
+        if s:
+            a["score"] = s
+            out.append(a)
+    return out
+
+
+def generate_drop_summary(article, model, completion_fn=completion):
+    """One cheap-model call -> {'short','long'} for a drop-report. Robust JSON parse;
+    injectable completion_fn so the dry run can stub it (no LLM spend)."""
+    content = (article.get("content_raw") or "")[:DROP_CONTENT_CHARS]
+    user = (
+        f"title: {article.get('title','')}\n"
+        f"source_url: {article.get('url','')}\n"
+        f"content:\n{content}"
+    )
+    resp = completion_fn(
+        model=model,
+        messages=[{"role": "system", "content": DROP_SUMMARY_SYSTEM},
+                  {"role": "user", "content": user}],
+        temperature=DROP_TEMPERATURE, max_tokens=DROP_MAX_TOKENS,
+    )
+    parsed = parse_json_obj(resp.choices[0].message.content)
+    return {
+        "short": str(parsed.get("short") or "").strip()[:DROP_SHORT_MAX_CHARS],
+        "long": str(parsed.get("long") or "").strip()[:DROP_LONG_MAX_CHARS],
+    }
+
+
+def build_drops(drop_candidates, main_theme_topics, max_drops, model, sources_map,
+                completion_fn=completion, max_per_source=1):
+    """Pick the top drops, weave-flag each against the main theme, and generate
+    summaries. Returns dicts {article, render, store, woven}. Logs if more than
+    max_drops qualify (no silent cap). On a summary failure, falls back to the
+    analyst's own text rather than crashing the brief."""
+    ordered = sorted(drop_candidates, key=composite_score, reverse=True)
+    if len(ordered) > max_drops:
+        print(f"  DROP CAP: {len(ordered)} investigative articles qualified; keeping top {max_drops} "
+              f"(others wait for a later brief).")
+    chosen = pick_diverse(ordered, max_drops, max_per_source, lambda a: a.get("source_id"))
+    slugs = set()
+    out = []
+    for a in chosen:
+        topics = a["score"].get("topics") or []
+        woven = is_woven(topics, main_theme_topics)
+        slug = make_slug(a.get("title", ""), slugs)
+        slugs.add(slug)
+        source = sources_map.get(a.get("source_id"), "Unknown")
+        try:
+            summary = generate_drop_summary(a, model, completion_fn)
+        except Exception as e:
+            print(f"  WARN: drop summary failed for '{a.get('title','')[:50]}': {e}; using analyst text.")
+            s = a["score"]
+            summary = {
+                "short": (s.get("differentiator") or s.get("reasoning") or a.get("title", ""))[:280],
+                "long": (s.get("reasoning") or "")[:1200],
+            }
+        render = {"title": a.get("title", ""), "short": summary["short"],
+                  "source": source, "url": a.get("url", ""), "slug": slug}
+        store = {**render, "long": summary["long"], "woven": woven,
+                 "article_id": a["id"], "topics": topics}
+        out.append({"article": a, "render": render, "store": store, "woven": woven})
+    return out
+
+
+def persist_drop_reports(date_str, drop_store_list, base_dir, briefing_id=None):
+    """Write the day's drop reports to a local JSON store so the OpenClaw agent can
+    return the long form on 'more: <slug>'. Best-effort; never sinks the brief."""
+    try:
+        d = os.path.join(base_dir, "data", "drop_reports")
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, f"{date_str}.json")
+        payload = {"date": date_str, "briefing_id": briefing_id, "drops": drop_store_list}
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        print(f"  Drop-reports stored: {path} ({len(drop_store_list)} drop(s))")
+        return path
+    except Exception as e:
+        print(f"  WARN: could not persist drop reports (non-fatal): {e}")
+        return None
+
+
+def run_writer():
+    config = load_config()
+    sb = get_supabase()
+    start = time.time()
+
+    model = config.get("writer_model", "gemini/gemini-2.5-flash-lite")
+    lang = config.get("writer_primary_language", "en")
+    min_rel = int(config.get("writer_min_relevance", 6))
+    rel_floor = int(config.get("writer_relevance_floor", 4))
+    delivery_account = config.get("writer_delivery_account", "newsframer")
+    min_themes = int(config.get("writer_min_themes", 3))
+    max_per_theme = int(config.get("writer_max_articles_per_theme", 6))
+    window_hours = int(config.get("writer_window_hours", 24))
+    # Fix 2: char cap scales with the number of themes (computed after clustering, below).
+    # item 1/2 (2026-06-22): per-theme SIZE is ONE control -> an absolute per-theme char TARGET that
+    # the writer is told to WRITE each theme to; the total cap is DERIVED after clustering.
+    _size_level = srf.resolve_size_level(config, "telegram")
+    per_theme_goal = srf.per_theme_target(config, _size_level)
+    per_highlight_chars = int(config.get("writer_per_highlight_chars", 250))
+    # Per-bundle theme floors (spec §8.1/§8.6) — Telegram brief only. Guarantee each active
+    # bundle a floor of themes, cap any single bundle, scale total with active-bundle count.
+    bundle_floors = config.get("bundle_theme_floors") or {
+        "crypto": 1, "geopolitics": 1, "cybersecurity": 1, "tech": 1
+    }
+    bundle_cap = int(config.get("bundle_theme_cap", 2))
+    theme_multiplier = float(config.get("theme_count_multiplier", 1.5))
+    theme_total_max = int(config.get("theme_count_max", 10))
+    writer_temperature = float(config.get("writer_temperature", 0.3))
+    writer_max_tokens = int(config.get("writer_max_tokens", 4500))
+
+    print("OpenClaw Writer starting...")
+    print(f"  Model:          {model}")
+    print(f"  Language:       {lang}")
+    print(f"  Window:         {window_hours}h")
+    print(f"  Min relevance:  {min_rel} (floor {rel_floor})")
+    print(f"  Themes:         min {min_themes}, per-bundle floors (cap {bundle_cap}, x{theme_multiplier}, max {theme_total_max})")
+    print(f"  Per-theme size: {_size_level} -> ~{per_theme_goal} chars/theme target")
+
+    context = load_user_context(sb)
+    print(f"  Interests:      {len(context['interests'])}")
+    print(f"  Hypotheses:     {len(context['hypotheses'])}")
+
+    # NF-NEW14 topic classes: a category's class sets its selection window (regular 24h; low-frequency
+    # e.g. a weekly-blog topic reaches back to cover its cadence), entry bar, and theme min-articles. Load the widest
+    # class window, then age-filter each category to its own below. Empty mapping == one global window.
+    tcl = tc.TopicClasses(
+        config.get("category_classes"), config.get("topic_classes"),
+        config.get("topic_class_default", tc.DEFAULT_CLASS), window_hours, min_rel,
+        floor_keeps_single=bool(config.get("topic_class_floor_keeps_single", True)))
+    load_window = tcl.max_window()
+    candidates, total_in_window = load_window_scored_articles(
+        sb, load_window, exclude_account=delivery_account
+    )
+    source_categories = load_source_categories(sb)
+
+    def _bundle_of(a):
+        return source_categories.get(a.get("source_id"))
+
+    # Keep each candidate only within ITS category's class window. The loader already excluded anything
+    # delivered (§4.3 set-difference), so a wider low-frequency window never re-sends across the slots.
+    candidates = tcl.filter_to_windows(candidates, datetime.now(timezone.utc), _bundle_of)
+    total_in_window = len(candidates)
+    # NF-NEW2: prove, in the run log, how far back this session actually reached.
+    fresh_h = int(config.get("whatsapp_fresh_hours", 6))
+    print("  " + window_span_report([a.get("published_at") for a in candidates],
+                                     window_hours, datetime.now(timezone.utc), fresh_h))
+    sources_map = load_sources_map(sb)
+
+    # Drop-reports (spec 8.5): investigative-category sources are handled on a wider
+    # 7-day deduped window, never as plain highlights. Pull them OUT of the normal
+    # 24h pool first so nothing double-lists. No investigative sources -> all no-ops.
+    investigative_ids = load_investigative_ids(sb)
+    if investigative_ids:
+        before = len(candidates)
+        candidates = [a for a in candidates if a.get("source_id") not in investigative_ids]
+        if before != len(candidates):
+            print(f"  Drop sources: pulled {before - len(candidates)} investigative article(s) "
+                  f"from the normal pool (handled as drops).")
+    # item 4 (2026-06-22): per-surface content scope for Telegram — surfaces.telegram.categories
+    # is a list of source-category bundles; ["*"] (default) = ALL bundles (current behaviour).
+    # Restricting it drops articles whose source category is not in the list (no special-casing in code).
+    tg_scope = ((config.get("surfaces") or {}).get("telegram") or {}).get("categories") or ["*"]
+    if "*" not in tg_scope:
+        _scope_cat = load_source_categories(sb)
+        _before_scope = len(candidates)
+        candidates = [a for a in candidates if _scope_cat.get(a.get("source_id")) in tg_scope]
+        print(f"  TG scope {tg_scope}: kept {len(candidates)}/{_before_scope} candidate(s) by source-category.")
+
+    drop_window = int(config.get("drop_report_window_hours", 168))
+    drop_candidates = load_drop_report_candidates(
+        sb, drop_window, investigative_ids, exclude_account=delivery_account
+    )
+    print(f"  Drop-report candidates (investigative, {drop_window}h, non-delivered): {len(drop_candidates)}")
+
+    # §4.5 relevance backoff, now PER-CATEGORY (NF-NEW14): each category's entry bar comes from its
+    # class (default = writer_min_relevance); a global relax lowers all bars toward writer_relevance_floor
+    # until >= min_themes qualify. No category mapped == the old single-threshold backoff.
+    articles, chosen_relax = tcl.filter_qualifying(candidates, rel_floor, min_themes, _bundle_of)
+    chosen_rel = min_rel - chosen_relax
+
+    if tcl.category_classes:
+        print(f"  Topic classes: {tcl.category_classes} | bars: {tcl.bars_map() or '(all default)'} "
+              f"| load window {load_window}h")
+    print(f"  Candidates (per-category window, non-delivered scored): {len(candidates)}")
+    print(f"  Qualifying (per-category bar, relax {chosen_relax}): {len(articles)}\n")
+
+    # §4.5 thin-day guard. Never backfill older/lower than the floor.
+    quiet_day = False
+    if len(articles) < min_themes:
+        if len(articles) >= 1:
+            quiet_day = True
+            print(f"  THIN DAY: {len(articles)} qualify (< {min_themes}). Writing a short quiet-day brief.")
+        else:
+            print("  QUIET DAY: 0 articles qualified within 24h. No brief written (delivery layer will alert).")
+            _log_writer_skip(sb, "quiet_day_no_articles", total_in_window)
+            return
+
+    effective_min_themes = 1 if quiet_day else min_themes
+
+    # Per-bundle theme floors (spec §8.1/§8.6): cluster ALL qualifying articles, then re-allocate which
+    # clusters become themes so each active bundle gets its floor, no bundle exceeds its cap, and the
+    # total scales with the active-bundle count. NF-NEW14: a cluster is theme-eligible only if it meets
+    # ITS class's min_theme_articles — so a regular daily-news topic needs a real >=2-article cluster (a
+    # lone article drops to highlights), while a low-frequency topic may stand alone.
+    all_clusters, _ = cluster_by_topic_overlap(articles, len(articles), max_per_theme)
+
+    def _cluster_cat(c):
+        return cluster_bundle(c, source_categories)
+
+    theme_eligible, sub_threshold = tcl.eligible_clusters(all_clusters, _cluster_cat)
+    clusters, leftovers, floor_report = select_themes_with_floors(
+        theme_eligible, source_categories, bundle_floors, bundle_cap, theme_multiplier, theme_total_max
+    )
+    for _c in sub_threshold:               # lone-article daily-news clusters -> highlight pool, never a theme
+        leftovers.extend(_c)
+    if sub_threshold:
+        print(f"  Theme-eligibility: {len(sub_threshold)} sub-threshold cluster(s) -> highlights (per-class min_theme_articles)")
+    print(f"  Bundle floors: {floor_report['num_active']} active bundle(s) -> "
+          f"{floor_report['theme_count']}/{floor_report['target_total']} themes | "
+          f"by-score={floor_report['before']} floored={floor_report['after']}")
+    # NF-D3: log-only source-skew flag per theme (uses the NF-D1 Ground-News bias tags).
+    # Fully wrapped — a bias-data hiccup just skips the check; it NEVER alters the brief.
+    _bias_of = {}
+    try:
+        _bias_rows = sb.table("sources").select("id, groundnews_publication_bias").execute().data or []
+        _bias_of = {r["id"]: r.get("groundnews_publication_bias") for r in _bias_rows}
+        for _i, _c in enumerate(clusters, 1):
+            _w = skew_warning([(a.get("source_id"), _bias_of.get(a.get("source_id"))) for a in _c],
+                              min_sources=int(config.get("source_skew_min_sources", 3)),
+                              skew_ratio=float(config.get("source_skew_ratio", 0.75)))
+            if _w:
+                print(f"  ⚠ THEME {_i} SOURCE-SKEW: {_w}")
+    except Exception as _e:
+        print(f"  (source-skew check skipped: {type(_e).__name__})")
+    highlights_count = int(config.get("writer_highlights_count", 8))
+    highlights_min_rel = int(config.get("writer_highlights_min_relevance", 8))
+    highlights = pick_highlights(leftovers, highlights_count, highlights_min_rel)
+
+    # item 3 (2026-06-19): collapse repetitive highlights — same event (deduplicator cluster_id)
+    # and same IDENTICAL analyst topic-set — and drop a highlight whose cluster already anchors a
+    # theme. Conservative + config-gated; default reproduces today's set when nothing is duplicate.
+    if config.get("highlight_dedup_enabled", True):
+        _theme_arts = [a for cl in clusters for a in cl]
+        _hl_before = len(highlights)
+        highlights = srf.dedupe_highlights(
+            highlights, _theme_arts,
+            by_cluster=bool(config.get("highlight_dedup_by_cluster", True)),
+            topic_overlap=float(config.get("highlight_dedup_topic_overlap", 1.0)),
+            min_shared_topics=int(config.get("highlight_dedup_min_shared_topics", 3)))
+        if len(highlights) != _hl_before:
+            print(f"  Highlight dedup: {_hl_before} -> {len(highlights)} (same event/topic collapsed)")
+
+    print(f"  Clusters formed: {len(clusters)}\n")
+    for i, c in enumerate(clusters, 1):
+        print(f"  Cluster {i}: {len(c)} articles, top: '{c[0]['title'][:70]}'")
+    print(f"\n  Highlights selected: {len(highlights)}")
+    for h in highlights:
+        print(f"    rel={h['score'].get('relevance_score')} | {h['title'][:70]}")
+
+    if len(clusters) < effective_min_themes:
+        print(f"\nOnly {len(clusters)} clusters. Need {effective_min_themes}+. Briefing skipped.")
+        _log_writer_skip(sb, "no_clusters", total_in_window)
+        return
+
+    # Drop-reports: weave-flag each against the main theme (themes[0]) and generate
+    # short+long summaries (eager). Woven drops are added into the main theme cluster
+    # so the LLM synthesizes them in; ALL drops also render in the Investigations
+    # section below. Empty drop_candidates -> brief identical to today's.
+    drop_model = config.get("drop_report_model", "gemini/gemini-2.5-flash-lite")
+    drop_max = int(config.get("drop_report_max", 3))
+    main_theme_topics = set()
+    if clusters:
+        for a in clusters[0]:
+            main_theme_topics |= set(a["score"].get("topics") or [])
+    drop_max_per_source = int(config.get("drop_report_max_per_source", 1))
+    import cc_writer
+    drops = build_drops(drop_candidates, main_theme_topics, drop_max, drop_model, sources_map,
+                        completion_fn=cc_writer.completion_fn(config, "drop_report"),
+                        max_per_source=drop_max_per_source) \
+        if drop_candidates else []
+    if drops:
+        woven_n = sum(1 for d in drops if d["woven"])
+        print(f"  Drops: {len(drops)} ({woven_n} woven into main theme, {len(drops) - woven_n} standalone)")
+        for d in drops:
+            if d["woven"] and clusters:
+                clusters[0].append(d["article"])
+
+    # item 2 (2026-06-22): DERIVED total cap = per-theme target x #themes + highlights allowance.
+    max_chars = srf.derive_cap(per_theme_goal, len(clusters), highlights_count, per_highlight_chars,
+                               int(config.get("writer_per_theme_source_chars", 500)))
+    # item 1/2: the output-token budget must scale with the cap too, or L would be truncated at the
+    # old fixed limit. Derive from the cap (~3 chars/token), floored by writer_max_tokens, clamped.
+    writer_max_tokens = min(int(config.get("writer_max_output_tokens_ceiling", 8000)),
+                            max(writer_max_tokens, max_chars // 3 + 500))
+    print(f"  Char cap (derived): {per_theme_goal}/theme x {len(clusters)} + {highlights_count} hl x "
+          f"{per_highlight_chars} = {max_chars} (size {_size_level}); max_tokens={writer_max_tokens}")
+
+    now_jst = datetime.now(JST)
+    briefing_date = now_jst.strftime("%Y-%m-%d (%H:%M JST)")
+    system_prompt = load_prompt_files()
+    relevant_count = len(articles)
+    # NF-NEW10c: per-theme one-sided-coverage note (left/right media only), reflecting the FINAL
+    # clusters (incl. woven drops). Wrapped — a hiccup just yields no notes; never breaks the brief.
+    try:
+        theme_coverage = [coverage_note([(a.get("source_id"), _bias_of.get(a.get("source_id"))) for a in c])
+                          for c in clusters]
+        _onesided = sum(1 for n in theme_coverage if n)
+        if _onesided:
+            print(f"  NF-NEW10c: {_onesided} theme(s) flagged one-sided (left/right media only)")
+    except Exception as _e:
+        theme_coverage = []
+
+    # NF-C1 sequencing (§4.4): detect cross-day fact shifts as a post-pass. OFF by default
+    # (sequencing_enabled=false) => never called, brief byte-for-byte unchanged. Fully wrapped:
+    # any failure is isolated and can never alter or block the brief.
+    shift_notes, shift_section = [], ""
+    if config.get("sequencing_enabled", False):
+        try:
+            placement = config.get("sequencing_placement", ["subsection", "inline"]) or []
+            shift_notes, shift_section = seq.detect_and_record(
+                sb, config, clusters, sources_map, datetime.now(timezone.utc), apply=True)
+            if "inline" not in placement:
+                shift_notes = []        # subsection-only: don't weave into themes
+            if "subsection" not in placement:
+                shift_section = ""      # inline-only: don't add the section
+            print(f"  NF-C1: {len(shift_notes)} inline note(s); subsection={'yes' if shift_section else 'no'}")
+        except Exception as _se:
+            print(f"  NF-C1 sequencing skipped (isolated): {type(_se).__name__}: {_se}")
+            shift_notes, shift_section = [], ""
+
+    user_prompt = build_user_prompt(
+        clusters, highlights, sources_map, context["by_id"], context,
+        total_in_window, relevant_count, briefing_date, max_chars, coverage_notes=theme_coverage,
+        shift_notes=shift_notes, per_theme_target=per_theme_goal,
+        chars_per_paragraph=int(config.get("writer_chars_per_paragraph", 1000))
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    # SUBSCRIPTION-FIRST (Phase 2 cost move): try the flat Max subscription via headless Claude Code
+    # (claude -p), then fall back to the metered API on ANY failure so a run never silently drops. The
+    # high-volume analyst is untouched (API). Default OFF reproduces today's API-only path byte-for-byte.
+    fallback_model = config.get("writer_fallback_model", "gemini/gemini-2.5-flash-lite")
+    used_model = model
+    briefing_text = None
+    t_in = t_out = 0
+    cost = 0.0
+
+    import cc_writer
+    if cc_writer.use_subscription(config, "writer"):
+        try:
+            sub_model = config.get("writer_subscription_model", "sonnet")
+            sub_timeout = int(config.get("writer_subscription_timeout_seconds", 600))
+            print(f"\nGenerating briefing via SUBSCRIPTION (claude -p, model={sub_model})...")
+            briefing_text, used_model, t_in, t_out = cc_writer.complete_via_subscription(
+                system_prompt, user_prompt, model=sub_model, timeout=sub_timeout,
+                max_thinking_tokens=int(config.get("writer_subscription_max_thinking_tokens", 0)))
+            cost = 0.0  # subscription = flat; no metered $ for this call
+            print(f"  subscription OK ({used_model}, in={t_in} out={t_out}, $0 metered)")
+        except Exception as sub_err:
+            cc_writer.notify_fallback("writer", sub_err, config)
+            print(f"  SUBSCRIPTION path FAILED: {type(sub_err).__name__}: {sub_err}\n  Falling back to API ({model})...")
+            briefing_text = None
+
+    if briefing_text is None:
+        # API path (unchanged): Anthropic primary, Gemini 2.5 Flash-Lite fallback on outage/rate-limit/billing.
+        used_model = model
+        print(f"\nGenerating briefing with {model} (API)...")
+        try:
+            response = completion(model=model, messages=messages, temperature=writer_temperature, max_tokens=writer_max_tokens)
+        except Exception as primary_err:
+            if fallback_model and fallback_model != model:
+                print(f"  PRIMARY {model} FAILED: {primary_err}\n  Falling back to {fallback_model}...")
+                used_model = fallback_model
+                response = completion(model=used_model, messages=messages, temperature=writer_temperature, max_tokens=writer_max_tokens)
+            else:
+                raise
+        briefing_text = response.choices[0].message.content.strip()
+        usage = getattr(response, "usage", None)
+        t_in = getattr(usage, "prompt_tokens", 0) if usage else 0
+        t_out = getattr(usage, "completion_tokens", 0) if usage else 0
+        cost = estimate_cost(config, used_model, t_in, t_out)
+
+    # 2026-09-04 Serbia-theme bug: a brief shipped cut off mid-URL because the model
+    # stopped on an output-token/length cap. Neither the subscription path (`claude -p`,
+    # the writer's DEFAULT) nor litellm reliably exposes a trustworthy finish_reason here,
+    # so this is a text-shape safety net applied to BOTH paths: never store a brief that
+    # ends on a line that looks unfinished. No-op (0 stripped) on a normal, complete brief.
+    briefing_text, _trunc_stripped = strip_incomplete_tail(briefing_text)
+    _truncflag = truncation_flag(_trunc_stripped)
+    if _truncflag:
+        print(f"  {_truncflag}")
+
+    if quiet_day:
+        briefing_text = QUIET_DAY_TEXT + "\n\n" + briefing_text
+
+    # Deterministic post-pass sections, spliced in a config-driven order (default reproduces
+    # investigations -> what_changed -> blindspot exactly). Each closure threads briefing_text through.
+    def _section_investigations(text):
+        # Drops always surface here (whether or not also woven into a theme). No drops -> no-op.
+        return splice_investigations(text, render_investigations_section([d["render"] for d in drops]))
+
+    def _section_what_changed(text):
+        # NF-C1 (§4.4): the deterministic "What Changed" subsection (empty when off/no deltas).
+        return seq.splice_what_changed(text, shift_section)
+
+    def _section_blindspot(text):
+        # NF-D2 (§8.2): Blindspot of the day — spliced like Investigations, fully isolated. OFF by
+        # default (blindspot_enabled=false) => no change. A parse miss adds nothing.
+        if config.get("blindspot_enabled", False) and config.get("blindspot_telegram", True):
+            try:
+                import blindspot as _bsp
+                _bs_block = _bsp.build_from_config(config)
+                if _bs_block:
+                    text = _bsp.splice(text, _bs_block)
+                    print(f"  NF-D2: Blindspot spliced ({len(_bs_block)} chars).")
+                else:
+                    print("  NF-D2: Blindspot — nothing strong today; skipped.")
+            except Exception as _be:
+                print(f"  NF-D2: Blindspot skipped (isolated): {type(_be).__name__}: {_be}")
+        return text
+
+    _SECTION_FUNCS = {
+        "investigations": _section_investigations,
+        "what_changed": _section_what_changed,
+        "blindspot": _section_blindspot,
+    }
+    for _sec in config.get("brief_section_order", ["investigations", "what_changed", "blindspot"]):
+        _fn = _SECTION_FUNCS.get(_sec)
+        if _fn:
+            briefing_text = _fn(briefing_text)
+
+    # t_in / t_out / cost were set above by whichever path ran (subscription => cost 0, flat; API =>
+    # estimate_cost). model_used / cost_usd land in agent_runs + briefings so the path is auditable.
+    duration_ms = int((time.time() - start) * 1000)
+
+    print(f"\n{'-' * 60}")
+    print(briefing_text)
+    print(f"{'-' * 60}\n")
+    print(f"Briefing chars: {len(briefing_text)} (limit: {max_chars}) | model: {used_model}")
+    # NF-F2: flag (don't fail) an over-cap brief so editorial drift is visible in the run log.
+    _overrun = overrun_flag(len(briefing_text), max_chars,
+                            config.get("writer_char_overrun_warn_ratio", 1.0))
+    if _overrun:
+        print(_overrun)
+    # NF-NEW1: flag (don't fail) any bare/raw URL — citations must be hyperlinked source names.
+    _bareurl = bare_url_flag(briefing_text)
+    if _bareurl:
+        print(_bareurl)
+    # 2026-09-08 Japan-theme bug: flag (don't fail) a '$' amount that shares a theme with a
+    # yen-linked citation (likely a mis-converted yen figure), and any theme whose stated
+    # total doesn't match the sum of its own listed components.
+    for _cm in find_currency_mismatches(briefing_text):
+        print(f"  ⚠ CURRENCY: theme \"{_cm['theme']}\" states a $ amount but cites a yen "
+              f"source ({', '.join(_cm['yen_urls'][:2])}) — check for a mis-converted yen figure.")
+    _total_tol = float(config.get("critic_currency_total_tolerance_pct", 0.05))
+    for _tm in find_theme_total_mismatches(briefing_text, tolerance_pct=_total_tol):
+        print(f"  ⚠ TOTAL MISMATCH: theme \"{_tm['theme']}\" states ~${_tm['stated_millions']:g}M "
+              f"total but components sum to ~${_tm['component_sum_millions']:g}M ({_tm['diff_pct']:g}% off).")
+    # 2026-09-05 bug: flag (don't fail) a highlight that upgrades a hedged/planned source
+    # claim into a completed fact.
+    _tenseflag = tense_mismatch_flag(highlights, briefing_text)
+    if _tenseflag:
+        print(f"  {_tenseflag}")
+    print(f"Tokens: in={t_in} out={t_out} | Cost: ${cost:.4f} | Time: {duration_ms}ms")
+
+    # Store. Record which article IDs went into the brief (clusters + highlights) so the
+    # delivery layer can mark them delivered (§4.3) once the send is confirmed.
+    selected_ids = (
+        [a["id"] for cluster in clusters for a in cluster]
+        + [h["id"] for h in highlights]
+        + [d["article"]["id"] for d in drops]
+    )
+    selected_ids = list(dict.fromkeys(selected_ids))
+    content_col = f"content_{lang}"
+    insert_row = {
+        "date": now_jst.date().isoformat(),
+        content_col: briefing_text,
+        "model_writer": used_model,
+        "cost_usd": round(cost, 6),
+        "article_ids": selected_ids,
+    }
+    result = sb.table("briefings").insert(insert_row).execute()
+    briefing_id = result.data[0]["id"] if result.data else None
+    print(f"Saved briefing id={briefing_id} ({len(selected_ids)} article_ids)")
+
+    if drops:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        persist_drop_reports(
+            now_jst.date().isoformat(), [d["store"] for d in drops], base_dir, briefing_id
+        )
+
+    record_run(sb, {
+        "agent_name": "writer",
+        "artifact_verified": bool(briefing_id),  # NF-14: the brief artifact (briefings row) exists
+        "model_used": used_model,
+        "tokens_in": t_in,
+        "tokens_out": t_out,
+        "cost_usd": round(cost, 6),
+        "duration_ms": duration_ms,
+        "status": "success",
+    })
+
+
+if __name__ == "__main__":
+    run_writer()
