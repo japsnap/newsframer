@@ -78,6 +78,51 @@ def test_operator_timezone():
     ok("offset_fallback", operator_tz({"operator_timezone": "Not/AZone", "operator_tz_offset_hours": 5}).utcoffset(None).total_seconds() == 5 * 3600)
 
 
+def test_brief_payload_lists_cited_articles_with_sources():
+    brief = {"id": "b1", "date": "2026-01-02", "content_en": "## T", "article_ids": ["a1", "a2", "gone"]}
+    arts = [{"id": "a1", "title": "One", "url": "u1", "source_id": "s1", "published_at": "p"},
+            {"id": "a2", "title": "Two", "url": "u2", "source_id": None}]
+    p = db.brief_payload(brief, arts, {"s1": {"name": "Wire", "category": "tech"}})
+    ok("payload_markdown", p["markdown"] == "## T" and p["date"] == "2026-01-02")
+    ok("payload_articles", [a["id"] for a in p["articles"]] == ["a1", "a2"])
+    ok("payload_source", p["articles"][0]["source"] == "Wire" and p["articles"][1]["source"] is None)
+
+
+def test_post_command_runs_with_paths():
+    with tempfile.TemporaryDirectory() as d:
+        md = os.path.join(d, "brief-x.md")
+        js = os.path.join(d, "brief-x.json")
+        marker = os.path.join(d, "ran.txt")
+        open(md, "w").close()
+        script = os.path.join(d, "publish.py")
+        with open(script, "w", encoding="utf-8") as f:
+            f.write("import sys\nopen(sys.argv[3], 'w', encoding='utf-8').write(sys.argv[1] + '|' + sys.argv[2])\n")
+        cmd = f'"{sys.executable}" "{script}" {{md}} {{json}} "{marker}"'
+        ok("marker_absent_before", not os.path.exists(marker))
+        rc = db.run_post_command(md, js, command=cmd, timeout=60)
+        ok("post_rc_0", rc == 0)
+        with open(marker, encoding="utf-8") as f:
+            ok("post_got_paths", f.read() == md + "|" + js)
+        ok("no_command_noop", db.run_post_command(md, js, command="") is None)
+
+
+def test_wizard_copies_templates_and_never_overwrites():
+    import setup_wizard as sw
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(os.path.join(d, "config"))
+        for n in ("models", "sources", "interests"):
+            with open(os.path.join(d, "config", f"{n}.example.yaml"), "w", encoding="utf-8") as f:
+                f.write(f"template: {n}\n")
+        with open(os.path.join(d, "config", "models.yaml"), "w", encoding="utf-8") as f:
+            f.write("mine: true\n")
+        made = sw.ensure_settings_file(d, print_fn=lambda s: None)
+        ok("copied_missing_two", sorted(os.path.basename(m) for m in made) == ["interests.yaml", "sources.yaml"])
+        with open(os.path.join(d, "config", "models.yaml"), encoding="utf-8") as f:
+            ok("existing_untouched", f.read() == "mine: true\n")
+        with open(os.path.join(d, "config", "sources.yaml"), encoding="utf-8") as f:
+            ok("copy_content", f.read() == "template: sources\n")
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in list(globals().items()):

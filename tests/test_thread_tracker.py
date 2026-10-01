@@ -12,6 +12,9 @@ from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "agents"))
 import thread_tracker as tt  # noqa: E402
+from operator_tz import operator_tz  # noqa: E402
+
+tt.JST = operator_tz({"operator_timezone": "Asia/Tokyo"})  # these cases are written in JST
 
 PASS = []
 

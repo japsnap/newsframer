@@ -1,0 +1,22 @@
+# NewsFramer interests and hypotheses: what the Analyst scores every article against.
+# Copy to config/interests.yaml and replace these placeholders with your own;
+# `python manage.py sync` writes them into the database (matched by topic, never deleted:
+# set active: false to retire one). The pipeline also runs with none.
+#
+# interests:   a topic you care about. weight nudges relevance: +3 strongly up ... -3 strongly down.
+# hypotheses:  a claim you are tracking. Each article is labelled as confirming, challenging or
+#              neutral against it, and contradicting evidence is surfaced, never filtered out.
+
+interests:
+  - topic: open-source developer tooling
+    weight: 3
+  - topic: renewable-energy grid storage
+    weight: 2
+  - topic: celebrity gossip
+    weight: -2
+
+hypotheses:
+  - topic: Small on-device AI models will displace cloud API calls for most consumer app features by 2027
+    stance: agree                 # agree | disagree | unsure
+    confidence: 5                 # 1..10
+    reasoning: Why you hold this, and what evidence would change your mind.

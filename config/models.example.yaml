@@ -24,7 +24,12 @@ operator_timezone: "UTC"               # IANA name, e.g. "Europe/London", "Ameri
 # a notes app). Sending it to a phone is optional: set delivery_channel to any channel OpenClaw
 # supports (telegram, whatsapp, discord, slack, signal, imessage, ...; ids at docs.openclaw.ai/channels)
 # and put the recipient in .env as DELIVERY_TARGET. Empty = file only, no phone needed.
-brief_output_dir: "output"
+brief_output_dir: "output"            # brief-<date>.md and brief-<date>.json (the brief + every cited article)
+# Optional command run after each brief is saved, to publish it anywhere (your site, a repo, Slack).
+# {md} and {json} are replaced with the two file paths. Runs on your machine with your rights, so only
+# put a command here you wrote yourself. Example: python publish.py {md}
+post_brief_command: ""
+post_brief_command_timeout_seconds: 300
 delivery_channel: ""
 delivery_account: "default"            # the OpenClaw account id for that channel
 

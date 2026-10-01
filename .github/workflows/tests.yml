@@ -1,0 +1,65 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  logic-tests:
+    # Pure-logic suite: no database, no AI calls (the Claude subscription path cannot run in CI).
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      NEWSFRAMER_NO_ALERTS: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python tests/run_all.py
+
+  db-init:
+    # Proves `python manage.py db-init` builds the full schema on a fresh Postgres with pgvector,
+    # and that running it twice is safe.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      SUPABASE_DB_URL: postgresql://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python manage.py db-init
+      - run: python manage.py db-init
+      - name: every table exists, with row level security on
+        run: |
+          python - <<'EOF'
+          import os, psycopg
+          want = {"sources", "raw_articles", "analyst_scores", "briefings", "deliveries", "junk_patterns",
+                  "user_context", "agent_runs", "execution_log", "tracked_threads"}
+          with psycopg.connect(os.environ["SUPABASE_DB_URL"]) as c:
+              rows = dict(c.execute("select tablename, rowsecurity from pg_tables where schemaname='public'").fetchall())
+              junk = c.execute("select count(*) from junk_patterns").fetchone()[0]
+          missing = want - set(rows)
+          open_tables = [t for t in want if t in rows and not rows[t]]
+          assert not missing, f"missing tables: {missing}"
+          assert not open_tables, f"RLS off: {open_tables}"
+          assert junk > 0, "junk filters not seeded"
+          print(f"ok: {len(want)} tables, RLS on, {junk} junk filters")
+          EOF

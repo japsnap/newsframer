@@ -24,8 +24,10 @@ Exit: 0 = sent+recorded (or nothing fresh to send); 1 = send failed (alerted); 2
 """
 import os
 import sys
+import json
 import time
 import argparse
+import subprocess
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -77,6 +79,8 @@ CHANNEL = (os.getenv("NEWSFRAMER_DELIVERY_CHANNEL") or _CFG.get("delivery_channe
 CHANNEL_ACCOUNT = os.getenv("NEWSFRAMER_TG_ACCOUNT") or _CFG.get("delivery_account") or "default"
 TARGET = os.getenv("DELIVERY_TARGET") or (os.getenv("TELEGRAM_CHAT_ID") if CHANNEL == "telegram" else None)
 OUTPUT_DIR = _CFG.get("brief_output_dir", "output")
+POST_COMMAND = (_CFG.get("post_brief_command") or "").strip()
+POST_COMMAND_TIMEOUT = int(_CFG.get("post_brief_command_timeout_seconds", 300))
 
 
 def write_brief_file(brief, out_dir=None):
@@ -90,6 +94,64 @@ def write_brief_file(brief, out_dir=None):
     path = d / f"brief-{date}.md"
     path.write_text(brief.get(LANG_COL) or "", encoding="utf-8")
     return path
+
+
+def brief_payload(brief, articles, sources):
+    """The JSON twin of the brief: the Markdown plus every cited article with its source. Pure."""
+    by_id = {a["id"]: a for a in articles}
+    rows = []
+    for aid in brief.get("article_ids") or []:
+        a = by_id.get(aid)
+        if not a:
+            continue
+        s = sources.get(a.get("source_id")) or {}
+        rows.append({"id": aid, "title": a.get("title"), "url": a.get("url"),
+                     "published_at": a.get("published_at"), "source": s.get("name"),
+                     "category": s.get("category")})
+    return {"date": str(brief.get("date") or ""), "brief_id": brief.get("id"),
+            "markdown": brief.get(LANG_COL) or "", "articles": rows}
+
+
+def write_brief_json(sb, brief, md_path):
+    """Write brief-<date>.json next to the Markdown file. Returns the path."""
+    ids = brief.get("article_ids") or []
+    articles = []
+    for i in range(0, len(ids), 100):
+        articles += (sb.table("raw_articles").select("id, title, url, published_at, source_id")
+                     .in_("id", ids[i:i + 100]).execute().data or [])
+    src_ids = sorted({a["source_id"] for a in articles if a.get("source_id")})
+    sources = {}
+    if src_ids:
+        for s in sb.table("sources").select("id, name, category").in_("id", src_ids).execute().data or []:
+            sources[s["id"]] = s
+    path = Path(md_path).with_suffix(".json")
+    path.write_text(json.dumps(brief_payload(brief, articles, sources), ensure_ascii=False, indent=2),
+                    encoding="utf-8")
+    return path
+
+
+def post_command_args(command, md_path, json_path):
+    """The post-save command with {md} and {json} filled in (quoted). Pure."""
+    return command.replace("{md}", f'"{md_path}"').replace("{json}", f'"{json_path}"')
+
+
+def run_post_command(md_path, json_path, command=None, timeout=None):
+    """Run the operator's post_brief_command (from THEIR config file only). Never blocks delivery;
+    a failure is printed and alerted. Returns the exit code, or None when no command is set."""
+    command = POST_COMMAND if command is None else command
+    if not command:
+        return None
+    cmd = post_command_args(command, md_path, json_path)
+    try:
+        r = subprocess.run(cmd, shell=True, cwd=str(BASE_DIR), timeout=timeout or POST_COMMAND_TIMEOUT)
+        print(f"deliver_brief: post_brief_command exited {r.returncode}")
+        if r.returncode != 0:
+            dlv.send_alert(f"NewsFramer: post_brief_command failed (exit {r.returncode}).")
+        return r.returncode
+    except Exception as e:
+        print(f"deliver_brief: post_brief_command failed: {type(e).__name__}: {e}")
+        dlv.send_alert(f"NewsFramer: post_brief_command failed ({type(e).__name__}).")
+        return -1
 
 
 def load_fresh_brief(sb):
@@ -189,7 +251,14 @@ def main():
     ids = brief.get("article_ids") or []
     if not args.dry_run:
         try:
-            print(f"deliver_brief: saved {write_brief_file(brief)}")
+            md_path = write_brief_file(brief)
+            print(f"deliver_brief: saved {md_path}")
+            try:
+                json_path = write_brief_json(sb, brief, md_path)
+                print(f"deliver_brief: saved {json_path}")
+                run_post_command(md_path, json_path)
+            except Exception as e:
+                print(f"deliver_brief: JSON / post command skipped ({type(e).__name__}: {e})")
         except Exception as e:
             print(f"deliver_brief: could not save the brief file ({type(e).__name__}: {e})")
             if not CHANNEL:

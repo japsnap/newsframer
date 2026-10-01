@@ -7,8 +7,9 @@
 -- historical names (e.g. user_context."ai_补完") that the engine
 -- code reads by name — they are kept verbatim on purpose so the code runs unchanged.
 --
--- All writes are service-role only in production. Row Level Security is left as Supabase defaults
--- except where an original migration explicitly enabled it (tracked_threads), preserved below.
+-- NewsFramer reads and writes with the service-role key only. Row Level Security is switched ON for
+-- every table at the end of this file with no policies, so Supabase's public (anon) key can read
+-- nothing; the service-role key bypasses RLS, so the pipeline is unaffected.
 
 -- pgvector — required for the 768-dim embeddings used by the deduplicator and thread tracker.
 create extension if not exists vector;
@@ -255,3 +256,16 @@ create table if not exists public.tracked_threads (
 create index if not exists idx_tracked_threads_active    on public.tracked_threads (active);
 create index if not exists idx_tracked_threads_last_seen on public.tracked_threads (last_seen_at);
 alter table public.tracked_threads enable row level security;
+
+-- ---------------------------------------------------------------------------
+-- Row Level Security: on for every table, no policies (service-role access only). Safe to re-run.
+-- ---------------------------------------------------------------------------
+alter table sources        enable row level security;
+alter table raw_articles   enable row level security;
+alter table analyst_scores enable row level security;
+alter table briefings      enable row level security;
+alter table deliveries     enable row level security;
+alter table junk_patterns  enable row level security;
+alter table user_context   enable row level security;
+alter table agent_runs     enable row level security;
+alter table execution_log  enable row level security;

@@ -11,6 +11,9 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "agents"))
 import cost_report as cr  # noqa: E402
+from operator_tz import operator_tz  # noqa: E402
+
+cr.JST = operator_tz({"operator_timezone": "Asia/Tokyo"})  # these cases are written in JST
 
 PASS = []
 

@@ -1,0 +1,639 @@
+# NewsFramer sources: the feeds your brief is built from. Copy to config/sources.yaml and edit;
+# `python manage.py sync` writes them into the database (adds new names, updates existing ones,
+# never deletes: set active: false to stop a source).
+#
+# Fields: name (unique key), category (the topic bundle; any text, e.g. science), weight (0..1,
+# editorial weight), source_type (news | blog | research), has_rss + rss_url (the feed), site_url,
+# language, fetch_mode (rss | browser_required for sites without a feed), fetch_window_hours,
+# scrape_days (e.g. "wed,sat" for sources fetched only on those days), region,
+# groundnews_publication_bias (left | center | right), groundnews_factuality, active.
+
+sources:
+
+  # --- crypto ---
+  - name: Bankless
+    category: crypto
+    weight: 1
+    source_type: blog
+    has_rss: true
+    rss_url: https://banklesshq.com/rss
+    site_url: https://banklesshq.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    active: true
+  - name: CoinDesk
+    category: crypto
+    weight: 1
+    source_type: news
+    has_rss: true
+    rss_url: https://www.coindesk.com/arc/outboundfeeds/rss/
+    site_url: https://coindesk.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    active: true
+  - name: Cointelegraph
+    category: crypto
+    weight: 0.9
+    source_type: news
+    has_rss: true
+    rss_url: https://cointelegraph.com/rss
+    site_url: https://cointelegraph.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    active: true
+  - name: Decrypt
+    category: crypto
+    weight: 0.9
+    source_type: news
+    has_rss: true
+    rss_url: https://decrypt.co/feed
+    site_url: https://decrypt.co
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    active: true
+  - name: Delphi Digital
+    category: crypto
+    weight: 0.9
+    source_type: research
+    has_rss: false
+    site_url: https://delphidigital.io
+    language: en
+    fetch_mode: browser_required
+    fetch_window_hours: 168
+    active: true
+  - name: Messari
+    category: crypto
+    weight: 1
+    source_type: research
+    has_rss: true
+    rss_url: https://messari.io/rss
+    site_url: https://messari.io
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    active: true
+  - name: The Block
+    category: crypto
+    weight: 1
+    source_type: news
+    has_rss: true
+    rss_url: https://www.theblock.co/rss.xml
+    site_url: https://theblock.co
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    active: true
+
+  # --- cybersecurity ---
+  - name: BleepingComputer
+    category: cybersecurity
+    weight: 1
+    source_type: news
+    has_rss: true
+    rss_url: https://www.bleepingcomputer.com/feed/
+    site_url: https://www.bleepingcomputer.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    region: Global
+    active: true
+  - name: Dark Reading
+    category: cybersecurity
+    weight: 0.9
+    source_type: news
+    has_rss: true
+    rss_url: https://www.darkreading.com/rss.xml
+    site_url: https://www.darkreading.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    region: Global
+    active: true
+  - name: KrebsOnSecurity
+    category: cybersecurity
+    weight: 0.9
+    source_type: blog
+    has_rss: true
+    rss_url: https://krebsonsecurity.com/feed/
+    site_url: https://krebsonsecurity.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 336
+    region: Global
+    active: true
+  - name: The Hacker News
+    category: cybersecurity
+    weight: 1
+    source_type: news
+    has_rss: true
+    rss_url: https://feeds.feedburner.com/TheHackersNews
+    site_url: https://thehackernews.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    region: Global
+    active: true
+
+  # --- geopolitics ---
+  - name: Al Jazeera
+    category: geopolitics
+    weight: 1
+    source_type: news
+    has_rss: true
+    rss_url: https://www.aljazeera.com/xml/rss/all.xml
+    site_url: https://aljazeera.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    groundnews_publication_bias: left
+    groundnews_factuality: High
+    active: true
+  - name: Associated Press
+    category: geopolitics
+    weight: 1
+    source_type: news
+    has_rss: true
+    rss_url: https://news.google.com/rss/search?q=site:apnews.com+when:1d&hl=en-US&gl=US&ceid=US:en
+    site_url: https://apnews.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    groundnews_publication_bias: left
+    groundnews_factuality: High
+    active: true
+  - name: BBC World
+    category: geopolitics
+    weight: 1
+    source_type: news
+    has_rss: true
+    rss_url: http://feeds.bbci.co.uk/news/world/rss.xml
+    site_url: https://bbc.com/news/world
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    groundnews_publication_bias: center
+    groundnews_factuality: High
+    active: true
+  - name: CNN
+    category: geopolitics
+    weight: 0.5
+    source_type: news
+    has_rss: true
+    rss_url: https://news.google.com/rss/search?q=site:cnn.com+when:1d&hl=en-US&gl=US&ceid=US:en
+    site_url: https://cnn.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    groundnews_publication_bias: left
+    groundnews_factuality: Mixed
+    active: true
+  - name: Heather Cox Richardson
+    category: geopolitics
+    weight: 0.7
+    source_type: blog
+    has_rss: true
+    rss_url: https://heathercoxrichardson.substack.com/feed
+    site_url: https://heathercoxrichardson.substack.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    groundnews_publication_bias: left
+    groundnews_factuality: Mixed
+    active: true
+  - name: Middle East Eye
+    category: geopolitics
+    weight: 0.9
+    source_type: news
+    has_rss: true
+    rss_url: https://www.middleeasteye.net/rss
+    site_url: https://www.middleeasteye.net
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 48
+    region: MENA
+    groundnews_publication_bias: left
+    groundnews_factuality: High
+    active: true
+  - name: Middle East Monitor
+    category: geopolitics
+    weight: 0.9
+    source_type: news
+    has_rss: true
+    rss_url: https://www.middleeastmonitor.com/feed/
+    site_url: https://www.middleeastmonitor.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    region: MENA
+    groundnews_publication_bias: left
+    groundnews_factuality: Mixed
+    active: true
+  - name: New York Post
+    category: geopolitics
+    weight: 0.5
+    source_type: news
+    has_rss: true
+    rss_url: https://nypost.com/feed/
+    site_url: https://nypost.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    groundnews_publication_bias: right
+    groundnews_factuality: Mixed
+    active: true
+  - name: Noahpinion
+    category: geopolitics
+    weight: 0.9
+    source_type: blog
+    has_rss: true
+    rss_url: https://noahpinion.substack.com/feed
+    site_url: https://noahpinion.substack.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    groundnews_publication_bias: center
+    groundnews_factuality: Mixed
+    active: true
+  - name: Reuters
+    category: geopolitics
+    weight: 1
+    source_type: news
+    has_rss: true
+    rss_url: https://news.google.com/rss/search?q=site:reuters.com+when:1d&hl=en-US&gl=US&ceid=US:en
+    site_url: https://reuters.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    groundnews_publication_bias: center
+    groundnews_factuality: High
+    active: true
+  - name: The Guardian
+    category: geopolitics
+    weight: 1
+    source_type: news
+    has_rss: true
+    rss_url: https://www.theguardian.com/world/rss
+    site_url: https://www.theguardian.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    region: Europe
+    groundnews_publication_bias: left
+    groundnews_factuality: High
+    active: true
+  - name: TRT Global
+    category: geopolitics
+    weight: 0.8
+    source_type: news
+    has_rss: false
+    site_url: https://www.trtworld.com/
+    language: en
+    fetch_mode: browser_required
+    fetch_window_hours: 24
+    region: MENA
+    groundnews_publication_bias: left
+    groundnews_factuality: Mixed
+    active: true
+  - name: Zeteo
+    category: geopolitics
+    weight: 0.7
+    source_type: news
+    has_rss: true
+    rss_url: https://zeteo.com/feed
+    site_url: https://zeteo.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    region: Global
+    groundnews_publication_bias: left
+    groundnews_factuality: Mixed
+    active: true
+
+  # --- investigative ---
+  - name: +972 Magazine
+    category: investigative
+    weight: 0.9
+    source_type: news
+    has_rss: true
+    rss_url: https://www.972mag.com/feed/
+    site_url: https://www.972mag.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 48
+    region: MENA
+    active: true
+  - name: Access Now
+    category: investigative
+    weight: 0.7
+    source_type: research
+    has_rss: true
+    rss_url: https://www.accessnow.org/feed/
+    site_url: https://www.accessnow.org
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 720
+    region: Global
+    active: true
+  - name: Amnesty Evidence Lab
+    category: investigative
+    weight: 0.7
+    source_type: research
+    has_rss: false
+    site_url: https://citizenevidence.org
+    language: en
+    fetch_mode: browser_required
+    fetch_window_hours: 168
+    region: Global
+    scrape_days: tue
+    active: true
+  - name: Amnesty Security Lab
+    category: investigative
+    weight: 0.8
+    source_type: research
+    has_rss: true
+    rss_url: https://securitylab.amnesty.org/feed/
+    site_url: https://securitylab.amnesty.org
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 720
+    region: Global
+    active: true
+  - name: Bellingcat
+    category: investigative
+    weight: 0.9
+    source_type: research
+    has_rss: true
+    rss_url: https://www.bellingcat.com/feed/
+    site_url: https://www.bellingcat.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 168
+    region: Global
+    active: true
+  - name: Center for Spatial Technologies
+    category: investigative
+    weight: 0.6
+    source_type: research
+    has_rss: false
+    site_url: https://spatialtech.info/
+    language: en
+    fetch_mode: browser_required
+    fetch_window_hours: 336
+    region: Global
+    scrape_days: thu
+    active: true
+  - name: Citizen Lab
+    category: investigative
+    weight: 0.9
+    source_type: research
+    has_rss: true
+    rss_url: https://citizenlab.ca/feed/
+    site_url: https://citizenlab.ca
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 336
+    region: Global
+    active: true
+  - name: EFF
+    category: investigative
+    weight: 0.8
+    source_type: research
+    has_rss: true
+    rss_url: https://www.eff.org/rss/updates.xml
+    site_url: https://www.eff.org
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 48
+    region: Global
+    active: true
+  - name: Forbidden Stories
+    category: investigative
+    weight: 0.8
+    source_type: news
+    has_rss: true
+    rss_url: https://forbiddenstories.org/feed/
+    site_url: https://forbiddenstories.org
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 168
+    region: Global
+    active: true
+  - name: Forensic Architecture
+    category: investigative
+    weight: 0.8
+    source_type: research
+    has_rss: true
+    rss_url: https://forensicarchitecture.substack.com/feed
+    site_url: https://forensicarchitecture.org
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 720
+    region: Global
+    active: true
+  - name: Google TAG
+    category: investigative
+    weight: 0.7
+    source_type: research
+    has_rss: true
+    rss_url: https://cloudblog.withgoogle.com/topics/threat-intelligence/rss/
+    site_url: https://cloud.google.com/blog/topics/threat-intelligence
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 168
+    region: Global
+    active: true
+  - name: TechNadu
+    category: investigative
+    weight: 0.6
+    source_type: news
+    has_rss: true
+    rss_url: https://www.technadu.com/feed/
+    site_url: https://www.technadu.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 168
+    region: Global
+    active: true
+  - name: The Intercept
+    category: investigative
+    weight: 0.9
+    source_type: news
+    has_rss: true
+    rss_url: https://theintercept.com/feed/?rss
+    site_url: https://theintercept.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 48
+    region: Global
+    active: true
+
+  # --- tech ---
+  - name: Ars Technica
+    category: tech
+    weight: 0.9
+    source_type: news
+    has_rss: true
+    rss_url: https://feeds.arstechnica.com/arstechnica/index
+    site_url: https://arstechnica.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    active: true
+  - name: Balaji Srinivasan
+    category: tech
+    weight: 1
+    source_type: blog
+    has_rss: true
+    rss_url: https://balajis.com/rss
+    site_url: https://balajis.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    active: true
+  - name: Benedict Evans
+    category: tech
+    weight: 1
+    source_type: blog
+    has_rss: true
+    rss_url: https://www.ben-evans.com/benedictevans/rss.xml
+    site_url: https://ben-evans.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    active: true
+  - name: IEEE Spectrum
+    category: tech
+    weight: 0.9
+    source_type: news
+    has_rss: true
+    rss_url: https://spectrum.ieee.org/feeds/feed.rss
+    site_url: https://spectrum.ieee.org
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    active: true
+  - name: Lenny Newsletter
+    category: tech
+    weight: 0.8
+    source_type: blog
+    has_rss: true
+    rss_url: https://www.lennysnewsletter.com/feed
+    site_url: https://lennysnewsletter.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    active: true
+  - name: Marginal Revolution
+    category: tech
+    weight: 0.9
+    source_type: blog
+    has_rss: true
+    rss_url: https://feeds.feedburner.com/marginalrevolution/feed
+    site_url: https://marginalrevolution.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    active: true
+  - name: MIT Technology Review
+    category: tech
+    weight: 1
+    source_type: news
+    has_rss: true
+    rss_url: https://www.technologyreview.com/feed/
+    site_url: https://technologyreview.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    active: true
+  - name: Naval Ravikant
+    category: tech
+    weight: 0.9
+    source_type: blog
+    has_rss: true
+    rss_url: https://nav.al/feed
+    site_url: https://nav.al
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    active: true
+  - name: Not Boring
+    category: tech
+    weight: 0.9
+    source_type: blog
+    has_rss: true
+    rss_url: https://www.notboring.co/feed
+    site_url: https://notboring.co
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    active: true
+  - name: Paul Graham Essays
+    category: tech
+    weight: 1
+    source_type: blog
+    has_rss: true
+    rss_url: http://www.paulgraham.com/rss.html
+    site_url: https://paulgraham.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    active: true
+  - name: Stratechery
+    category: tech
+    weight: 1
+    source_type: blog
+    has_rss: true
+    rss_url: https://stratechery.com/feed/
+    site_url: https://stratechery.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    active: true
+  - name: TechCrunch
+    category: tech
+    weight: 1
+    source_type: news
+    has_rss: true
+    rss_url: https://techcrunch.com/feed/
+    site_url: https://techcrunch.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    active: true
+  - name: The Generalist
+    category: tech
+    weight: 0.9
+    source_type: blog
+    has_rss: true
+    rss_url: https://www.generalist.com/feed
+    site_url: https://generalist.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    active: true
+  - name: The Verge
+    category: tech
+    weight: 0.9
+    source_type: news
+    has_rss: true
+    rss_url: https://www.theverge.com/rss/index.xml
+    site_url: https://theverge.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    active: true
+  - name: Wired
+    category: tech
+    weight: 0.9
+    source_type: news
+    has_rss: true
+    rss_url: https://www.wired.com/feed/rss
+    site_url: https://wired.com
+    language: en
+    fetch_mode: rss
+    fetch_window_hours: 24
+    active: true

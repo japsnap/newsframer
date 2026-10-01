@@ -143,17 +143,25 @@ def send_alert(text):
         return False
 
 
-def _openclaw_mjs():
-    return os.environ.get(
-        "OPENCLAW_MJS",
-        os.path.join(os.environ.get("APPDATA", ""), "npm", "node_modules", "openclaw", "openclaw.mjs"),
-    )
+def openclaw_prefix():
+    """How to invoke the OpenClaw CLI: OPENCLAW_MJS (run with node) if set, else the Windows npm
+    global install if present, else the `openclaw` command on PATH (macOS / Linux / any install)."""
+    import shutil
+    mjs = os.environ.get("OPENCLAW_MJS")
+    if mjs:
+        return ["node", mjs]
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        default = os.path.join(appdata, "npm", "node_modules", "openclaw", "openclaw.mjs")
+        if os.path.exists(default):
+            return ["node", default]
+    return [shutil.which("openclaw") or "openclaw"]
 
 
 def gateway_send(channel, account, target, message, timeout=GATEWAY_SEND_TIMEOUT):
     """Send one message via the gateway subprocess (the path that returns real
     message IDs). Returns the messageId string on success, else None."""
-    cmd = ["node", _openclaw_mjs(), "message", "send", "--channel", channel,
+    cmd = [*openclaw_prefix(), "message", "send", "--channel", channel,
            "--account", account, "--target", target, "--message", message, "--json"]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)

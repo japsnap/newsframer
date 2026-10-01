@@ -27,7 +27,7 @@ from agents.writer import (  # noqa: E402  (reuse, do not modify writer.py)
     load_config, get_supabase, load_window_scored_articles, cluster_by_topic_overlap,
     pick_highlights, build_user_prompt, load_prompt_files, estimate_cost, JST,
 )
-from agents.deliver import record_delivered, send_alert  # noqa: E402  (§4.3 confirmed-send recording)
+from agents.deliver import record_delivered, send_alert, openclaw_prefix  # noqa: E402  (§4.3 confirmed-send recording)
 from agents.run_log import record_run  # noqa: E402  (NF-14: track WhatsApp-path LLM cost)
 from agents.char_monitor import overrun_flag  # noqa: E402  (NF-F2: over-cap quality flag)
 from agents.window_audit import window_span_report  # noqa: E402  (NF-NEW2: provable 24h window)
@@ -43,11 +43,7 @@ except Exception:
     pass
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-OPENCLAW_MJS = os.environ.get(
-    "OPENCLAW_MJS",
-    os.path.join(os.environ.get("APPDATA", ""), "npm", "node_modules", "openclaw", "openclaw.mjs"),
-)
-TMP = os.environ.get("TEMP", BASE)
+TMP = os.environ.get("TEMP") or os.environ.get("TMPDIR") or BASE
 REGISTRY_PATH = os.path.join(BASE, "config", "whatsapp_deliveries.yaml")
 _DEFAULT_LANG_LABELS = {"ur": "Urdu (Urdu script)", "ar": "Arabic", "hi": "Hindi", "en": "English"}
 try:  # wrapped so a missing/broken config falls back to the defaults, never breaks import
@@ -477,7 +473,7 @@ def translate(config, text, lang, translate_model, sb=None):
 
 
 def send_whatsapp(text, account, target):
-    cmd = ["node", OPENCLAW_MJS, "message", "send", "--channel", "whatsapp",
+    cmd = [*openclaw_prefix(), "message", "send", "--channel", "whatsapp",
            "--account", account, "--target", target, "--message", text, "--json"]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=_send_timeout())
     return r.returncode, (r.stdout or "")[-400:], (r.stderr or "")[-200:]

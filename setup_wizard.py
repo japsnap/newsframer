@@ -32,22 +32,34 @@ OPTIONAL = [
     ("ANTHROPIC_API_KEY", "metered Claude API, fallback only; most people skip this (Enter to skip)"),
     ("TELEGRAM_BOT_TOKEN", "alerts to your phone: from @BotFather after /newbot (Enter to skip)"),
     ("TELEGRAM_CHAT_ID", "your numeric Telegram chat id, for alerts (Enter to skip)"),
+    ("SUPABASE_DB_URL", "Postgres connection string (Supabase: Connect > URI, with your DB password), "
+                        "lets  python manage.py db-init  create the tables for you (Enter to skip)"),
     ("DELIVERY_TARGET", "who receives the brief if you set delivery_channel (chat id / number; Enter to skip)"),
     ("FIRECRAWL_API_KEY", "only for the no-RSS scrape sources (free tier is fine; Enter to skip)"),
     ("OPENCLAW_MJS", "path to openclaw.mjs if not in the default npm location (Enter to skip)"),
 ]
 
 
+TEMPLATES = [
+    ("models", "your settings: set operator_timezone in it"),
+    ("sources", "your news sources: edit, then python manage.py sync"),
+    ("interests", "your interests and hypotheses: edit, then python manage.py sync"),
+]
+
+
 def ensure_settings_file(base, print_fn=print):
-    """Copy config/models.example.yaml -> config/models.yaml when the latter is missing. Never
-    overwrites. Returns True if a copy was made."""
-    src = os.path.join(base, "config", "models.example.yaml")
-    dst = os.path.join(base, "config", "models.yaml")
-    if os.path.exists(dst) or not os.path.exists(src):
-        return False
-    shutil.copyfile(src, dst)
-    print_fn(f"Created your settings file {dst} from the template. Set operator_timezone in it.")
-    return True
+    """Copy each config/<name>.example.yaml -> config/<name>.yaml when the latter is missing. Never
+    overwrites. Returns the list of files created."""
+    made = []
+    for name, hint in TEMPLATES:
+        src = os.path.join(base, "config", f"{name}.example.yaml")
+        dst = os.path.join(base, "config", f"{name}.yaml")
+        if os.path.exists(dst) or not os.path.exists(src):
+            continue
+        shutil.copyfile(src, dst)
+        made.append(dst)
+        print_fn(f"Created {dst} ({hint}).")
+    return made
 
 
 def claude_cli_hint(which=shutil.which):
@@ -121,10 +133,10 @@ def run_wizard(base_dir=None, input_fn=input, print_fn=print):
     written = [n for n, _ in REQUIRED + OPTIONAL if (answers.get(n) or "").strip()]
     print_fn(f"\nWrote {env_path} with: {', '.join(written)}")
     print_fn("\nNext steps:")
-    print_fn("  1. If you haven't yet: run sql/schema.sql then the sql/seed_*.sql files in the")
-    print_fn("     Supabase SQL editor (one paste each).")
-    print_fn("  2. python setup_check.py   <- verifies everything is reachable before the first run")
-    print_fn("  3. python run_brief.py     <- your first brief (prints to the console)")
+    print_fn("  1. python manage.py db-init  <- creates the tables (or paste sql/schema.sql into Supabase)")
+    print_fn("  2. python manage.py sync     <- loads config/sources.yaml and config/interests.yaml")
+    print_fn("  3. python setup_check.py     <- verifies everything before the first run")
+    print_fn("  4. python run_daily.py       <- your first brief, saved in output/")
     return 0
 
 

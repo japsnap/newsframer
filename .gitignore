@@ -71,6 +71,8 @@ logs/
 # Personal, never public: live settings (template = config/models.example.yaml), the dev diary,
 # applied migrations, personal source lists, generated briefs
 config/models.yaml
+config/sources.yaml
+config/interests.yaml
 CHANGELOG.md
 sql/archive/
 *.personal.*

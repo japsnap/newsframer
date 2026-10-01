@@ -55,7 +55,10 @@ except Exception:
 
 def load_config():
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    with open(os.path.join(base_dir, "config", "models.yaml"), "r", encoding="utf-8") as f:
+    path = os.path.join(base_dir, "config", "models.yaml")
+    if not os.path.exists(path):  # fresh clone before setup_wizard: run on the shipped template
+        path = os.path.join(base_dir, "config", "models.example.yaml")
+    with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 

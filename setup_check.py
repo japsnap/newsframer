@@ -33,7 +33,7 @@ EXPECTED_TABLES = [
     "junk_patterns", "user_context", "agent_runs", "execution_log", "tracked_threads",
 ]
 REQUIRED_ENV = ["SUPABASE_URL", "SUPABASE_SERVICE_KEY"]
-OPTIONAL_ENV = ["GEMINI_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "DELIVERY_TARGET",
+OPTIONAL_ENV = ["SUPABASE_DB_URL", "GEMINI_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "DELIVERY_TARGET",
                 "ANTHROPIC_API_KEY", "FIRECRAWL_API_KEY"]
 
 results = []  # (name, passed, detail)
