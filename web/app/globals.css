@@ -1,0 +1,278 @@
+@import "tailwindcss";
+
+/* ============================================================
+   NewsFramer, "the wire desk"
+   The brief arrives on paper. The machine runs in the dark.
+   Landing + brief = paper ground. Console = ink ground.
+
+   The palette is the logo's: navy tile, amber frame, cream camera.
+   Amber is the single accent and never carries text on a light ground,
+   where it sits at 1.9:1. It fills, bars, chips and underlines instead,
+   and it only becomes type on the ink ground, where it clears 8:1.
+   ============================================================ */
+
+@theme {
+  /* ground: white page, warm white band, cream chip */
+  --color-paper: #ffffff;
+  --color-paper-2: #faf6ec;
+  --color-cream: #f2eddf;
+
+  /* ink: the logo tile */
+  --color-ink: #1e2430;
+  --color-ink-2: #262e3c;
+  --color-ink-3: #333c4d;
+
+  /* structure */
+  --color-rule: #e3ded0;
+  --color-rule-dark: #37404f;
+
+  /* voice: the logo amber, the one accent */
+  --color-signal: #f0b429;
+  --color-signal-lift: #ffc845;
+  --color-signal-soft: #fbe7bb;
+
+  /* the quiet second tone, navy family so it never fights the amber */
+  --color-steel: #3f4a5c;
+  --color-steel-lift: #9aa7bc;
+
+  /* rust survives only for negative weights and write errors on the console */
+  --color-flag: #96341c;
+  --color-flag-lift: #d4795e;
+
+  /* muted text */
+  --color-muted: #5c6270;
+  --color-muted-dark: #8d95a3;
+
+  --font-display: var(--font-archivo), "Arial Narrow", sans-serif;
+  --font-body: var(--font-newsreader), Georgia, serif;
+  --font-wire: var(--font-plex-mono), ui-monospace, monospace;
+
+  --text-hero: clamp(2.6rem, 7.2vw, 5.4rem);
+  --text-section: clamp(1.75rem, 3.6vw, 2.75rem);
+  /* the landing hero: smaller than --text-hero so the 1200x750 first screen
+     holds headline, status, buttons and the brief sheet together */
+  --text-lead: clamp(2.5rem, 5.4vw, 4.25rem);
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-body);
+    font-size: 1.0625rem;
+    line-height: 1.6;
+    font-synthesis-weight: none;
+  }
+
+  ::selection {
+    background: var(--color-signal);
+    color: var(--color-ink);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-signal);
+    outline-offset: 3px;
+    border-radius: 1px;
+  }
+
+  /* The display voice is a WIDE grotesque held at tight tracking. That pairing
+     is what keeps it from reading as any default sans. */
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-variation-settings: "wdth" 112;
+    letter-spacing: -0.03em;
+    line-height: 1.02;
+    text-wrap: balance;
+  }
+
+  h3,
+  h4 {
+    font-variation-settings: "wdth" 104;
+    letter-spacing: -0.015em;
+  }
+}
+
+@layer components {
+  /* small caps wire label, the utility voice of the whole system */
+  .wire {
+    font-family: var(--font-wire);
+    font-size: 0.6875rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    font-weight: 500;
+  }
+
+  .wire-sm {
+    font-family: var(--font-wire);
+    font-size: 0.625rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    font-weight: 500;
+  }
+
+  .shell {
+    width: 100%;
+    max-width: 76rem;
+    margin-inline: auto;
+    padding-inline: 1.25rem;
+  }
+
+  @media (min-width: 768px) {
+    .shell {
+      padding-inline: 2.5rem;
+    }
+  }
+
+  /* Buttons. Ink is the one primary action; the line button is secondary. */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    min-height: 3rem;
+    padding: 0.75rem 1.4rem;
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 1rem;
+    letter-spacing: -0.005em;
+    transition:
+      background-color 160ms ease,
+      color 160ms ease,
+      transform 120ms ease-out;
+  }
+
+  .btn:active {
+    transform: scale(0.97);
+  }
+
+  .btn-ink {
+    background: var(--color-ink);
+    color: var(--color-paper);
+  }
+
+  .btn-line {
+    border: 1px solid var(--color-ink);
+    color: var(--color-ink);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .btn-ink:hover {
+      background: var(--color-steel);
+    }
+    .btn-line:hover {
+      background: var(--color-ink);
+      color: var(--color-paper);
+    }
+  }
+
+  /* The record: one sentence set large, the three numbers in amber on ink. */
+  .record {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-variation-settings: "wdth" 104;
+    font-size: clamp(1.5rem, 3.2vw, 2.4rem);
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+    text-wrap: pretty;
+  }
+
+  /* the recurring structural motif: a hairline with a signal tick at its head */
+  .tick-rule {
+    position: relative;
+    border-top: 1px solid var(--color-rule);
+  }
+
+  .tick-rule::before {
+    content: "";
+    position: absolute;
+    top: -1px;
+    left: 0;
+    width: 2.75rem;
+    height: 3px;
+    background: var(--color-signal);
+  }
+
+  .tick-rule-dark {
+    border-top-color: var(--color-rule-dark);
+  }
+
+  /* The amber highlighter. Amber cannot carry type on a light ground, so where
+     a phrase needs the accent it gets a band struck through the lower third of
+     the line instead and the type stays navy. Clones across wrapped lines. */
+  .hl {
+    background-image: linear-gradient(
+      to bottom,
+      transparent 58%,
+      var(--color-signal) 58%,
+      var(--color-signal) 90%,
+      transparent 90%
+    );
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+  }
+
+  /* A filled amber square, the small punctuation mark of the whole system.
+     It replaces every place a slash or a middot used to be tinted amber. */
+  .pip {
+    display: inline-block;
+    width: 0.5rem;
+    height: 0.5rem;
+    background: var(--color-signal);
+    vertical-align: baseline;
+  }
+}
+
+/* the cascade: raw pool ticks settling into place on load */
+@keyframes tick-settle {
+  from {
+    opacity: 0;
+    transform: translateY(-7px) scaleY(0.35);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes meter-fill {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The one load moment: hero lines and the brief sheet rise once, staggered
+   by inline animation-delay. Transform and opacity only. */
+.anim-rise {
+  animation: rise 0.6s cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

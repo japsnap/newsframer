@@ -8,6 +8,8 @@ NewsFramer reads your RSS feeds every morning, drops duplicates and noise, score
 
 [A real brief](examples/brief-sample.md) · [Quickstart](#quickstart) · [Guide for AI coding agents](#for-ai-coding-agents) · ![tests](https://github.com/japsnap/newsframer/actions/workflows/tests.yml/badge.svg) (logic tests on Linux and Windows)
 
+The website (a landing page, a sample brief and a console for your interests and sources) lives in [`web/`](web/), a Next.js app; see [`web/DEPLOY-NOTES.md`](web/DEPLOY-NOTES.md).
+
 ---
 
 ## Quickstart
